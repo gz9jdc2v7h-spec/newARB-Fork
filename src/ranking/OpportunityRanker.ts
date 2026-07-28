@@ -1,12 +1,13 @@
 import { ethers } from "ethers";
 import { PairQuotes } from "../discovery/OpportunityScanner";
-import { PriceQuote } from "../discovery/PriceFeeder";
+import { PriceQuote, fetchQuote } from "../discovery/PriceFeeder";
 import { GasData, getGasData, estimateGasCostUsd } from "./GasEstimator";
 import { toFloat } from "../utils/helpers";
-import { TOKENS, MIN_PROFIT_USD, MAX_SLIPPAGE } from "../config";
+import { TOKENS, MIN_PROFIT_USD, MAX_SLIPPAGE, DEXES } from "../config";
 import { logger } from "../utils/logger";
 import {
   cfmmOptimalInput,
+  cfmmAmountOut,
   cfmmArbProfit,
   cfmmPriceImpact,
   cfmmLiquidityDepth,
@@ -33,6 +34,11 @@ export interface ArbitrageOpportunity {
   gasCostUsd: number;
   /** Expected net profit in USD */
   netProfitUsd: number;
+  /**
+   * Actual capital deployed for the trade in USD (tradeAmountIn × input token price).
+   * Used by Kelly scoring and portfolio optimisation — not an estimate.
+   */
+  tradeAmountInUsd: number;
   /**
    * Kelly-adjusted risk score (higher = better risk-adjusted return).
    * Replaces the simple profit-to-gas ratio with a rigorous utility-maximising
@@ -75,8 +81,14 @@ function ethPriceUsd(snapshot: PairQuotes[]): number {
  *   2. If at least one leg is UniV3 (no reserves): use a conservative
  *      fraction of the quoted amount, scaled by the price spread.
  *
- * The closed-form solution is the global maximiser of P(x) = output − input
- * under the constant-product AMM model. No heuristic needed.
+ * Correct pool layout for the profitable direction (A→B→A round-trip):
+ *   Sell tokenIn on the HIGHER-price DEX (sellQuote) first — Pool 1.
+ *   Buy tokenIn back on the LOWER-price DEX (buyQuote) second — Pool 2 (reversed).
+ *
+ *   Pool 1: r1 = sellQuote.reserveIn  (tokenIn  reserve of high-price pool)
+ *           s1 = sellQuote.reserveOut (tokenOut reserve of high-price pool)
+ *   Pool 2: r2 = buyQuote.reserveOut  (tokenOut reserve of low-price pool)
+ *           s2 = buyQuote.reserveIn   (tokenIn  reserve of low-price pool)
  */
 function computeOptimalInput(buyQuote: PriceQuote, sellQuote: PriceQuote): bigint {
   const hasBuyReserves =
@@ -90,42 +102,116 @@ function computeOptimalInput(buyQuote: PriceQuote, sellQuote: PriceQuote): bigin
 
   if (hasBuyReserves && hasSellReserves) {
     // Closed-form x* from CfmmMath.
-    // Pool layout:
-    //   Pool 1 (buy): r1 = reserveIn (tokenBase), s1 = reserveOut (tokenQuote)
-    //   Pool 2 (sell): r2 = reserveIn-of-tokenQuote = sellQuote.reserveOut,
-    //                  s2 = reserveOut-of-tokenBase = sellQuote.reserveIn
+    // Pool 1 (sell tokenIn for tokenOut on high-price DEX):
+    //   r1 = sellQuote.reserveIn, s1 = sellQuote.reserveOut
+    // Pool 2 (buy tokenIn back with tokenOut on low-price DEX):
+    //   r2 = buyQuote.reserveOut, s2 = buyQuote.reserveIn
     const x = cfmmOptimalInput(
-      buyQuote.reserveIn!,
+      sellQuote.reserveIn!,
+      sellQuote.reserveOut!,
+      sellQuote.feeBps!,
       buyQuote.reserveOut!,
-      buyQuote.feeBps!,
-      sellQuote.reserveOut!, // tokenQuote reserve in sell pool
-      sellQuote.reserveIn!,  // tokenBase reserve in sell pool
-      sellQuote.feeBps!
+      buyQuote.reserveIn!,
+      buyQuote.feeBps!
     );
     // Verify the profit is positive at x* (guards against edge cases)
     if (x > 0n) {
       const profit = cfmmArbProfit(
         x,
-        buyQuote.reserveIn!,
-        buyQuote.reserveOut!,
-        buyQuote.feeBps!,
-        sellQuote.reserveOut!,
         sellQuote.reserveIn!,
-        sellQuote.feeBps!
+        sellQuote.reserveOut!,
+        sellQuote.feeBps!,
+        buyQuote.reserveOut!,
+        buyQuote.reserveIn!,
+        buyQuote.feeBps!
       );
       if (profit > 0n) return x;
     }
   }
 
   // Fallback: spread-proportional fraction of quoted amount.
-  // We still honour the calculus insight that x* grows with the price spread,
-  // using a first-order approximation: factor ≈ spread / (2 × impact_rate).
   const spread = (sellQuote.price - buyQuote.price) / buyQuote.price;
   if (spread <= 0) return 0n;
 
   // Conservative cap: 60 % of quoted amount, scaled by spread magnitude
   const factor = Math.min(0.6 + spread * 4, 1.0);
-  return BigInt(Math.floor(Number(buyQuote.amountIn) * factor));
+  return BigInt(Math.floor(Number(sellQuote.amountIn) * factor));
+}
+
+// ─── Exact two-leg profit from real on-chain data ────────────────────────────
+
+/**
+ * Compute the exact gross profit of a two-leg round-trip at `tradeAmountIn`.
+ *
+ * Leg 1: sell tokenIn on the HIGH-price DEX (sellQuote).
+ * Leg 2: buy tokenIn back on the LOW-price DEX (buyQuote) using tokenOut received.
+ *
+ * UniV2 legs: exact CFMM formula using on-chain reserves (no RPC call).
+ * UniV3 legs: re-queries the on-chain quoter at the actual trade amount.
+ *
+ * @returns Exact profit in raw tokenIn units, or 0n if unprofitable / query fails.
+ */
+async function computeExactProfit(
+  provider: ethers.Provider,
+  buyQuote: PriceQuote,
+  sellQuote: PriceQuote,
+  tradeAmountIn: bigint
+): Promise<bigint> {
+  const hasBuyReserves =
+    buyQuote.reserveIn !== undefined &&
+    buyQuote.reserveOut !== undefined &&
+    buyQuote.feeBps !== undefined;
+  const hasSellReserves =
+    sellQuote.reserveIn !== undefined &&
+    sellQuote.reserveOut !== undefined &&
+    sellQuote.feeBps !== undefined;
+
+  // ── UniV2 / UniV2: fully exact via CFMM reserves, zero extra RPC calls ────
+  if (hasBuyReserves && hasSellReserves) {
+    return cfmmArbProfit(
+      tradeAmountIn,
+      sellQuote.reserveIn!,  sellQuote.reserveOut!, sellQuote.feeBps!,
+      buyQuote.reserveOut!,  buyQuote.reserveIn!,   buyQuote.feeBps!
+    );
+  }
+
+  // ── At least one UniV3 leg: re-query quoter at actual trade size ──────────
+
+  // Leg 1: sell tradeAmountIn of tokenIn on sellQuote DEX → get tokenOut
+  let leg1Out: bigint;
+  if (hasSellReserves) {
+    // UniV2 sell leg — exact CFMM, no RPC
+    leg1Out = cfmmAmountOut(
+      sellQuote.reserveIn!, sellQuote.reserveOut!, tradeAmountIn, sellQuote.feeBps!
+    );
+  } else {
+    // UniV3 sell leg — re-quote at actual size on-chain
+    const dex = DEXES.find((d) => d.name === sellQuote.dex);
+    if (!dex) return 0n;
+    const q = await fetchQuote(provider, dex, sellQuote.tokenIn, sellQuote.tokenOut, tradeAmountIn);
+    if (!q || q.amountOut === 0n) return 0n;
+    leg1Out = q.amountOut;
+  }
+  if (leg1Out === 0n) return 0n;
+
+  // Leg 2: sell leg1Out of tokenOut on buyQuote DEX → get tokenIn back
+  let leg2Out: bigint;
+  if (hasBuyReserves) {
+    // UniV2 buy leg (reverse direction) — exact CFMM, no RPC
+    // reserveOut is the tokenOut side of the pool; reserveIn is the tokenIn side.
+    leg2Out = cfmmAmountOut(
+      buyQuote.reserveOut!, buyQuote.reserveIn!, leg1Out, buyQuote.feeBps!
+    );
+  } else {
+    // UniV3 buy leg — re-quote the reverse direction (tokenOut → tokenIn) on-chain
+    const dex = DEXES.find((d) => d.name === buyQuote.dex);
+    if (!dex) return 0n;
+    const q = await fetchQuote(provider, dex, buyQuote.tokenOut, buyQuote.tokenIn, leg1Out);
+    if (!q || q.amountOut === 0n) return 0n;
+    leg2Out = q.amountOut;
+  }
+
+  return leg2Out > tradeAmountIn ? leg2Out - tradeAmountIn : 0n;
 }
 
 // ─── Ranker ───────────────────────────────────────────────────────────────────
@@ -150,12 +236,13 @@ export class OpportunityRanker {
     const arbPaths = findArbitragePaths(snapshot);
     const multiHopKeys = new Set(arbPaths.map((p) => cycleKey(p.tokens)));
 
-    // Enumerate two-pool opportunities
-    const opportunities: ArbitrageOpportunity[] = [];
-    for (const pairData of snapshot) {
-      const opps = this.findOpportunities(pairData, gasData, ethUsd, multiHopKeys);
-      opportunities.push(...opps);
-    }
+    // Enumerate two-pool opportunities across all pairs in parallel
+    const oppArrays = await Promise.all(
+      snapshot.map((pairData) =>
+        this.findOpportunities(pairData, gasData, ethUsd, multiHopKeys)
+      )
+    );
+    const opportunities = oppArrays.flat();
 
     // Sort by Kelly score descending (Kelly score = risk-adjusted return)
     opportunities.sort((a, b) => b.score - a.score);
@@ -203,12 +290,12 @@ export class OpportunityRanker {
 
   // ─── Two-pool opportunity search ─────────────────────────────────────────
 
-  private findOpportunities(
+  private async findOpportunities(
     pairData: PairQuotes,
     gasData: GasData,
     ethUsd: number,
     multiHopKeys: Set<string>
-  ): ArbitrageOpportunity[] {
+  ): Promise<ArbitrageOpportunity[]> {
     const { tokenIn, tokenOut, quotes } = pairData;
     if (quotes.length < 2) return [];
 
@@ -240,23 +327,23 @@ export class OpportunityRanker {
         const tradeAmountIn = computeOptimalInput(buyQuote, sellQuote);
         if (tradeAmountIn === 0n) continue;
 
-        // Scale expected output proportionally to tradeAmountIn
-        const scaleFactor = Number(tradeAmountIn) / Number(buyQuote.amountIn);
-        const scaledAmountOut = BigInt(Math.floor(Number(buyQuote.amountOut) * scaleFactor));
-
-        // Gross output in tokenIn units (after selling scaledAmountOut on sell DEX)
-        const grossOut =
-          BigInt(Math.floor(Number(scaledAmountOut) * sellQuote.price)) - tradeAmountIn;
-        if (grossOut <= 0n) continue;
-
         const tokenInCfg = TOKENS[tokenIn];
         if (!tokenInCfg) continue;
 
-        // Convert gross profit to USD
+        // ── Exact gross profit from real on-chain data ─────────────────────
+        // UniV2/UniV2: uses CFMM reserves directly (no extra RPC call).
+        // Any UniV3 leg: re-queries the on-chain quoter at the actual trade size.
+        // This is the only value feeding the final MIN_PROFIT_USD gate.
+        const grossProfitRaw = await computeExactProfit(
+          this.provider, buyQuote, sellQuote, tradeAmountIn
+        );
+        if (grossProfitRaw <= 0n) continue;
+
+        // Convert exact raw profit to USD
         const grossProfitEth =
           tokenIn === "WETH" || tokenIn === "ETH"
-            ? toFloat(grossOut, 18)
-            : toFloat(grossOut, tokenInCfg.decimals) / ethUsd;
+            ? toFloat(grossProfitRaw, 18)
+            : toFloat(grossProfitRaw, tokenInCfg.decimals) / ethUsd;
         const grossProfitUsd = grossProfitEth * ethUsd;
 
         // Gas cost
@@ -272,20 +359,27 @@ export class OpportunityRanker {
             ? cfmmPriceImpact(buyQuote.reserveIn, tradeAmountIn, buyQuote.feeBps)
             : spread / 2;
         const priceImpactSell =
-          sellQuote.reserveOut !== undefined && sellQuote.feeBps !== undefined
-            ? cfmmPriceImpact(sellQuote.reserveOut, scaledAmountOut, sellQuote.feeBps)
+          sellQuote.reserveIn !== undefined && sellQuote.feeBps !== undefined
+            ? cfmmPriceImpact(sellQuote.reserveIn, tradeAmountIn, sellQuote.feeBps)
             : spread / 2;
 
-        // ── Liquidity depth (for scoring: prefer deep pools) ──────────────
-        const buyDepth =
-          buyQuote.reserveIn !== undefined
-            ? cfmmLiquidityDepth(buyQuote.reserveIn, tokenInCfg.decimals, ethUsd)
-            : 1e6;
+        // ── Liquidity depth — retained for future liquidity-depth scoring ─
+        // TODO: incorporate buyDepth into the Kelly score as a pool-size penalty
+        if (buyQuote.reserveIn !== undefined) {
+          cfmmLiquidityDepth(buyQuote.reserveIn, tokenInCfg.decimals, ethUsd);
+        }
+
+        // ── Actual capital deployed for Kelly & portfolio scoring ─────────
+        // Use actual tradeAmountIn × token price — not a proxy derived from profit.
+        const tradeAmountInNormalized = Number(tradeAmountIn) / 10 ** tokenInCfg.decimals;
+        const tradeAmountInUsd =
+          tokenIn === "WETH" || tokenIn === "ETH"
+            ? tradeAmountInNormalized * ethUsd
+            : tradeAmountInNormalized; // stablecoins ≈ $1; consistent with grossProfitEth
+        // capitalUsd = actual capital deployed (not inflated by gas cost)
+        const capitalUsd = tradeAmountInUsd;
 
         // ── Kelly risk-adjusted score ─────────────────────────────────────
-        // Kelly criterion replaces the simple profit/gas ratio with a
-        // utility-maximising score that accounts for execution uncertainty.
-        const capitalUsd = grossProfitUsd + gasCostUsd; // rough capital proxy
         const volatilityFactor = pairStats ? 1 + pairStats.dailyVolatility * 10 : 1;
         const score = kellyScore(netProfitUsd, gasCostUsd, capitalUsd, 0.88, volatilityFactor);
 
@@ -305,6 +399,7 @@ export class OpportunityRanker {
           grossProfitUsd,
           gasCostUsd,
           netProfitUsd,
+          tradeAmountInUsd,
           score,
           priceImpactBuy,
           priceImpactSell,

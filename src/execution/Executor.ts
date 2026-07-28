@@ -172,20 +172,21 @@ export class Executor {
       const tokenInCfg = TOKENS[buyQuote.tokenIn]!;
       const tokenOutCfg = TOKENS[buyQuote.tokenOut]!;
 
-      // ── Leg 1: buy tokenOut on the cheaper DEX ──────────────────────────
+      // ── Leg 1: sell tokenIn on the higher-price DEX (sellQuote) ────────────
+      // Selling where tokenIn is worth MORE maximises the tokenOut received.
       const slippageFactor = 1 - MAX_SLIPPAGE;
       const minOut1 = BigInt(
-        Math.floor(Number(buyQuote.amountOut) * slippageFactor)
+        Math.floor(Number(sellQuote.amountOut) * slippageFactor)
       );
 
-      const buyDexCfg = DEXES.find((d) => d.name === buyQuote.dex)!;
+      const sellDexCfg = DEXES.find((d) => d.name === sellQuote.dex)!;
       let receipt1: ethers.TransactionReceipt;
 
-      if (buyDexCfg.type === "UniV2") {
+      if (sellDexCfg.type === "UniV2") {
         receipt1 = await withRetry(() =>
           executeUniV2Swap(
             this.wallet,
-            buyDexCfg.router,
+            sellDexCfg.router,
             tokenInCfg.address,
             tokenOutCfg.address,
             tradeAmountIn,
@@ -194,11 +195,11 @@ export class Executor {
           )
         );
       } else {
-        const fee = buyDexCfg.feeTiers?.[0] ?? 3000;
+        const fee = sellDexCfg.feeTiers?.[0] ?? 3000;
         receipt1 = await withRetry(() =>
           executeUniV3Swap(
             this.wallet,
-            buyDexCfg.router,
+            sellDexCfg.router,
             tokenInCfg.address,
             tokenOutCfg.address,
             fee,
@@ -211,19 +212,23 @@ export class Executor {
 
       logger.info("Leg 1 confirmed", { hash: receipt1.hash, gas: receipt1.gasUsed.toString() });
 
-      // ── Leg 2: sell tokenOut on the pricier DEX ─────────────────────────
-      // Use the actual output from leg 1 as input to leg 2
+      // ── Leg 2: buy tokenIn back on the lower-price DEX (buyQuote) ──────────
+      // Buying back where tokenIn costs LESS maximises the round-trip profit.
+      // Use the actual output from leg 1 as input to leg 2.
       const actualOut1 = await this.getActualOutput(receipt1, tokenOutCfg.address);
+      if (actualOut1 === 0n) {
+        throw new Error("Leg 1 produced no output — aborting before leg 2");
+      }
       const minOut2 = BigInt(Math.floor(Number(actualOut1) * slippageFactor));
 
-      const sellDexCfg = DEXES.find((d) => d.name === sellQuote.dex)!;
+      const buyDexCfg = DEXES.find((d) => d.name === buyQuote.dex)!;
       let receipt2: ethers.TransactionReceipt;
 
-      if (sellDexCfg.type === "UniV2") {
+      if (buyDexCfg.type === "UniV2") {
         receipt2 = await withRetry(() =>
           executeUniV2Swap(
             this.wallet,
-            sellDexCfg.router,
+            buyDexCfg.router,
             tokenOutCfg.address,
             tokenInCfg.address,
             actualOut1,
@@ -232,11 +237,11 @@ export class Executor {
           )
         );
       } else {
-        const fee = sellDexCfg.feeTiers?.[0] ?? 3000;
+        const fee = buyDexCfg.feeTiers?.[0] ?? 3000;
         receipt2 = await withRetry(() =>
           executeUniV3Swap(
             this.wallet,
-            sellDexCfg.router,
+            buyDexCfg.router,
             tokenOutCfg.address,
             tokenInCfg.address,
             fee,

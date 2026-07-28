@@ -209,19 +209,19 @@ export function selectOptimalPortfolio(
   // Simple greedy for trivial cases (≤ 2 items)
   if (opportunities.length <= 2) {
     const selected = opportunities.filter((o) => {
-      const cost = estimateCostUsd(o, inputPriceUsd);
+      const cost = estimateCostUsd(o);
       return cost <= budgetUsd;
     });
     return {
       selected,
       totalNetProfitUsd: selected.reduce((s, o) => s + o.netProfitUsd, 0),
-      totalCapitalUsd: selected.reduce((s, o) => s + estimateCostUsd(o, inputPriceUsd), 0),
+      totalCapitalUsd: selected.reduce((s, o) => s + estimateCostUsd(o), 0),
       energy: 0,
     };
   }
 
   const profits = opportunities.map((o) => o.netProfitUsd);
-  const costs = opportunities.map((o) => estimateCostUsd(o, inputPriceUsd));
+  const costs = opportunities.map((o) => estimateCostUsd(o));
 
   // Run NUM_RESTARTS independent annealing chains with different seeds
   let bestResult = { x: opportunities.map(() => false), totalProfit: 0, totalCost: 0 };
@@ -254,9 +254,7 @@ export function selectOptimalPortfolio(
   };
 }
 
-/** Estimate capital required for an opportunity in USD. */
-function estimateCostUsd(o: ArbitrageOpportunity, inputPriceUsd: number): number {
-  // tradeAmountIn is in raw input-token units
-  // A safe approximation: use gross profit + gas as a proxy for capital needed
-  return o.grossProfitUsd + o.gasCostUsd;
+/** Actual capital required for an opportunity in USD (tradeAmountIn × token price). */
+function estimateCostUsd(o: ArbitrageOpportunity): number {
+  return o.tradeAmountInUsd;
 }
