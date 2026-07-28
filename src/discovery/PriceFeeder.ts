@@ -14,6 +14,13 @@ export interface PriceQuote {
   /** Gas estimate for this swap (units) */
   gasEstimate: bigint;
   timestamp: number;
+  // ── UniV2 pool data (populated for CFMM-exact calculations) ──────────────
+  /** Raw pool reserve of the input token (UniV2 only). */
+  reserveIn?: bigint;
+  /** Raw pool reserve of the output token (UniV2 only). */
+  reserveOut?: bigint;
+  /** Pool fee in basis points (e.g. 30 for 0.3 %). */
+  feeBps?: number;
 }
 
 // How many WETH (18 dec) we price-check by default
@@ -76,6 +83,10 @@ async function quoteUniV2(
     price,
     gasEstimate: 110_000n, // typical UniV2 swap gas
     timestamp: Date.now(),
+    // Expose reserves so the CFMM math layer can compute the exact optimal input
+    reserveIn,
+    reserveOut,
+    feeBps: fee / 100, // convert ppm → bps (e.g. 3000 → 30)
   };
 }
 
