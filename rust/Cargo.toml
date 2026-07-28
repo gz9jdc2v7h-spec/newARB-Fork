@@ -1,0 +1,29 @@
+[workspace]
+members = [
+    "crates/rust_math",
+    "crates/adapters",
+    "crates/scanner_core",
+    "crates/ranking",
+    "crates/validator",
+    "crates/scanner_pyo3",
+]
+resolver = "2"
+
+[workspace.package]
+version      = "0.1.0"
+edition      = "2021"
+authors      = ["Apex-Omega"]
+license      = "MIT"
+repository   = "https://github.com/gz9jdc2v7h-spec/newARB-Fork"
+
+[workspace.dependencies]
+# Fixed-point / math
+primitive-types = { version = "0.13", default-features = false }
+num-traits      = "0.2"
+# Serde
+serde       = { version = "1", features = ["derive"] }
+serde_json  = "1"
+# PyO3 (optional, only pulled by scanner_pyo3)
+pyo3 = { version = "0.22", features = ["extension-module"] }
+# Criterion benchmarks
+criterion = { version = "0.5", features = ["html_reports"] }
