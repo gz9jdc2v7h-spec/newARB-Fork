@@ -391,7 +391,10 @@ export class OpportunityRanker {
         // This correctly handles WETH, stablecoins, WBTC, ARB and any other
         // token present in the snapshot — previous code wrongly fell back to
         // treating non-WETH token units as dollars.
-        const tokenInPriceUsd = tokenPrices.get(tokenIn) ?? 1.0;
+        const tokenInPriceUsd = tokenPrices.get(tokenIn);
+        // Skip if we cannot price the input token — an assumed price would
+        // corrupt the profit gate and Kelly score.
+        if (tokenInPriceUsd === undefined) continue;
         const grossProfitUsd =
           toFloat(grossProfitRaw, tokenInCfg.decimals) * tokenInPriceUsd;
 
