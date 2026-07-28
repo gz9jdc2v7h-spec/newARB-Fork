@@ -45,8 +45,6 @@ const SHORT_WINDOW = 5;
 const LONG_WINDOW = 20;
 /** Bollinger-band sigma multiplier for spread threshold. */
 const BB_SIGMA = 2.0;
-/** Maximum history length to retain. */
-const MAX_HISTORY = 200;
 
 function alpha(window: number): number {
   return 2 / (window + 1);

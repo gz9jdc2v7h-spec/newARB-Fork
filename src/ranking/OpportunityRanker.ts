@@ -13,7 +13,7 @@ import {
   cfmmLiquidityDepth,
 } from "../math/CfmmMath";
 import { findArbitragePaths, cycleKey, ArbPath } from "../math/BellmanFord";
-import { kellyScore, kellyPositionSize } from "../math/KellyCriterion";
+import { kellyScore } from "../math/KellyCriterion";
 import { EmaTracker, classifyRegime } from "../math/EmaTracker";
 import { selectOptimalPortfolio, PortfolioSelection } from "../math/QuantumSelector";
 
@@ -53,14 +53,20 @@ export interface ArbitrageOpportunity {
   isMultiHop: boolean;
 }
 
-// ─── ETH price oracle (derived from snapshot) ────────────────────────────────
+// ─── Token price oracle (derived from snapshot) ───────────────────────────────
 
+/**
+ * Derive the ETH/USD price from the snapshot (weighted average over all
+ * WETH→stablecoin quotes).
+ */
 function ethPriceUsd(snapshot: PairQuotes[]): number {
-  // Weighted average of all WETH/stable quotes for better accuracy
   let sum = 0;
   let count = 0;
   for (const pair of snapshot) {
-    if (pair.tokenIn === "WETH" && (pair.tokenOut === "USDC" || pair.tokenOut === "USDT" || pair.tokenOut === "DAI")) {
+    if (
+      pair.tokenIn === "WETH" &&
+      (pair.tokenOut === "USDC" || pair.tokenOut === "USDT" || pair.tokenOut === "DAI")
+    ) {
       for (const q of pair.quotes) {
         sum += q.price;
         count++;
@@ -68,6 +74,46 @@ function ethPriceUsd(snapshot: PairQuotes[]): number {
     }
   }
   return count > 0 ? sum / count : 3_000;
+}
+
+/**
+ * Build a symbol → USD price map for every token in the snapshot.
+ *
+ * Resolution order (highest priority first):
+ *   1. Hard-coded: WETH=ethUsd, USDC/USDT/DAI=1.0
+ *   2. Derived from a tokenIn/WETH pair:  price_usd = quote.price × ethUsd
+ *   3. Derived from a tokenIn/stablecoin pair: price_usd = quote.price × stablecoin_price
+ *
+ * This correctly prices WBTC, ARB and any other token present in the snapshot
+ * instead of treating their raw units as dollars.
+ */
+function buildTokenPricesUsd(snapshot: PairQuotes[], ethUsd: number): Map<string, number> {
+  const prices = new Map<string, number>([
+    ["WETH", ethUsd],
+    ["ETH",  ethUsd],
+    ["USDC", 1.0],
+    ["USDT", 1.0],
+    ["DAI",  1.0],
+  ]);
+
+  for (const pair of snapshot) {
+    if (prices.has(pair.tokenIn) || pair.quotes.length === 0) continue;
+    const avgPrice =
+      pair.quotes.reduce((s, q) => s + q.price, 0) / pair.quotes.length;
+
+    if (pair.tokenOut === "WETH" || pair.tokenOut === "ETH") {
+      // avgPrice = (tokenOut normalised) / (tokenIn normalised) = WETH per tokenIn
+      prices.set(pair.tokenIn, avgPrice * ethUsd);
+    } else {
+      const quoteTokenPrice = prices.get(pair.tokenOut);
+      if (quoteTokenPrice !== undefined) {
+        // avgPrice = (stablecoin) / (tokenIn) → USD per tokenIn
+        prices.set(pair.tokenIn, avgPrice * quoteTokenPrice);
+      }
+    }
+  }
+
+  return prices;
 }
 
 // ─── Optimal trade sizing ─────────────────────────────────────────────────────
@@ -228,6 +274,7 @@ export class OpportunityRanker {
   async rank(snapshot: PairQuotes[]): Promise<ArbitrageOpportunity[]> {
     const gasData = await getGasData(this.provider);
     const ethUsd = ethPriceUsd(snapshot);
+    const tokenPrices = buildTokenPricesUsd(snapshot, ethUsd);
 
     // Feed EMA tracker with latest prices
     this.updateEmaTracker(snapshot);
@@ -239,7 +286,7 @@ export class OpportunityRanker {
     // Enumerate two-pool opportunities across all pairs in parallel
     const oppArrays = await Promise.all(
       snapshot.map((pairData) =>
-        this.findOpportunities(pairData, gasData, ethUsd, multiHopKeys)
+        this.findOpportunities(pairData, gasData, ethUsd, multiHopKeys, tokenPrices)
       )
     );
     const opportunities = oppArrays.flat();
@@ -294,7 +341,8 @@ export class OpportunityRanker {
     pairData: PairQuotes,
     gasData: GasData,
     ethUsd: number,
-    multiHopKeys: Set<string>
+    multiHopKeys: Set<string>,
+    tokenPrices: Map<string, number>
   ): Promise<ArbitrageOpportunity[]> {
     const { tokenIn, tokenOut, quotes } = pairData;
     if (quotes.length < 2) return [];
@@ -339,12 +387,13 @@ export class OpportunityRanker {
         );
         if (grossProfitRaw <= 0n) continue;
 
-        // Convert exact raw profit to USD
-        const grossProfitEth =
-          tokenIn === "WETH" || tokenIn === "ETH"
-            ? toFloat(grossProfitRaw, 18)
-            : toFloat(grossProfitRaw, tokenInCfg.decimals) / ethUsd;
-        const grossProfitUsd = grossProfitEth * ethUsd;
+        // Convert exact raw profit to USD using the per-token price oracle.
+        // This correctly handles WETH, stablecoins, WBTC, ARB and any other
+        // token present in the snapshot — previous code wrongly fell back to
+        // treating non-WETH token units as dollars.
+        const tokenInPriceUsd = tokenPrices.get(tokenIn) ?? 1.0;
+        const grossProfitUsd =
+          toFloat(grossProfitRaw, tokenInCfg.decimals) * tokenInPriceUsd;
 
         // Gas cost
         const totalGasUnits = buyQuote.gasEstimate + sellQuote.gasEstimate;
@@ -370,22 +419,20 @@ export class OpportunityRanker {
         }
 
         // ── Actual capital deployed for Kelly & portfolio scoring ─────────
-        // Use actual tradeAmountIn × token price — not a proxy derived from profit.
+        // tradeAmountIn × per-token USD price — correct for all token types.
         const tradeAmountInNormalized = Number(tradeAmountIn) / 10 ** tokenInCfg.decimals;
-        const tradeAmountInUsd =
-          tokenIn === "WETH" || tokenIn === "ETH"
-            ? tradeAmountInNormalized * ethUsd
-            : tradeAmountInNormalized; // stablecoins ≈ $1; consistent with grossProfitEth
+        const tradeAmountInUsd = tradeAmountInNormalized * tokenInPriceUsd;
         // capitalUsd = actual capital deployed (not inflated by gas cost)
         const capitalUsd = tradeAmountInUsd;
 
         // ── Kelly risk-adjusted score ─────────────────────────────────────
         const volatilityFactor = pairStats ? 1 + pairStats.dailyVolatility * 10 : 1;
-        const score = kellyScore(netProfitUsd, gasCostUsd, capitalUsd, 0.88, volatilityFactor);
+        const baseScore = kellyScore(netProfitUsd, gasCostUsd, capitalUsd, 0.88, volatilityFactor);
 
-        // ── Multi-hop bonus: if this pair is part of a BF cycle, score up ──
+        // ── Multi-hop bonus: confirmed Bellman–Ford cycle → +15 % score ───
         const pairKey = cycleKey([tokenIn, tokenOut]);
         const isMultiHop = multiHopKeys.has(pairKey);
+        const score = isMultiHop ? baseScore * 1.15 : baseScore;
 
         const label = `${tokenIn}→${tokenOut} [${buyQuote.dex}↔${sellQuote.dex}]${isMultiHop ? " 🔄" : ""}`;
 
