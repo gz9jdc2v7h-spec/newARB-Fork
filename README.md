@@ -39,7 +39,7 @@ src/
 
 | Feature | Detail |
 |---|---|
-| **Multi-DEX discovery** | Uniswap V3, Camelot V3, SushiSwap V2, Camelot V2, Balancer V2 |
+| **Multi-DEX discovery** | Uniswap V3, SushiSwap V2, QuickSwap V2, Balancer V2 |
 | **Bounded concurrency** | Configurable worker pool (`DISCOVERY_WORKERS`) for RPC calls |
 | **WebSocket subscriptions** | Block-event driven scanning; falls back to HTTP polling |
 | **EIP-1559 gas optimisation** | Dynamic `maxFeePerGas` capped by `MAX_GAS_PRICE_GWEI` |
