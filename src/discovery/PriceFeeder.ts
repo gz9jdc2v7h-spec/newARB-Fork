@@ -107,11 +107,7 @@ async function discoverBalancerPoolsForPair(
     const latestBlock = await provider.getBlockNumber();
     const poolIds = new Set<string>();
 
-    for (
-      let fromBlock = BALANCER_DISCOVERY_FROM_BLOCK;
-      fromBlock <= latestBlock;
-      fromBlock += BALANCER_DISCOVERY_STEP
-    ) {
+    for (let fromBlock = BALANCER_DISCOVERY_FROM_BLOCK; fromBlock <= latestBlock; ) {
       const toBlock = Math.min(fromBlock + BALANCER_DISCOVERY_STEP - 1, latestBlock);
       const logs = await withRetry(() =>
         provider.getLogs({
@@ -125,6 +121,7 @@ async function discoverBalancerPoolsForPair(
         const poolId = log.topics[1];
         if (poolId) poolIds.add(poolId);
       }
+      fromBlock = toBlock + 1;
     }
 
     if (poolIds.size === 0) return [];
@@ -315,6 +312,8 @@ async function quoteBalancer(
       );
 
       if (deltas.length < 2) continue;
+      // Balancer queryBatchSwap returns signed vault deltas:
+      // negative delta on assetOut means tokens leave the vault to the trader.
       const amountOut = -deltas[1];
       if (amountOut <= 0n) continue;
 

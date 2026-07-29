@@ -253,8 +253,14 @@ export class Executor {
         );
       } else {
         if (!sellQuote.poolId || !sellDexCfg.vault) {
+          const missing = [
+            !sellQuote.poolId ? "poolId" : null,
+            !sellDexCfg.vault ? "vault address" : null,
+          ]
+            .filter((v): v is string => v !== null)
+            .join(", ");
           throw new Error(
-            `Missing Balancer ${!sellQuote.poolId ? "poolId" : "vault address"} for ${sellQuote.dex}`
+            `Missing Balancer ${missing} for ${sellQuote.dex}`
           );
         }
         const sellVault = sellDexCfg.vault;
@@ -315,8 +321,14 @@ export class Executor {
         );
       } else {
         if (!buyQuote.poolId || !buyDexCfg.vault) {
+          const missing = [
+            !buyQuote.poolId ? "poolId" : null,
+            !buyDexCfg.vault ? "vault address" : null,
+          ]
+            .filter((v): v is string => v !== null)
+            .join(", ");
           throw new Error(
-            `Missing Balancer ${!buyQuote.poolId ? "poolId" : "vault address"} for ${buyQuote.dex}`
+            `Missing Balancer ${missing} for ${buyQuote.dex}`
           );
         }
         const buyVault = buyDexCfg.vault;
