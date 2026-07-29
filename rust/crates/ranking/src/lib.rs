@@ -179,10 +179,10 @@ mod tests {
 
     fn make_row(pool: &str, price: f64) -> CandidateRow {
         CandidateRow {
-            chain_id: 137,
-            protocol: Protocol::QuickSwapV2,
+            chain_id: 42161,
+            protocol: Protocol::CamelotV2,
             pool_address: pool.to_string(),
-            base_token_symbol: "WMATIC".to_string(),
+            base_token_symbol: "WETH".to_string(),
             quote_token_symbol: "USDC".to_string(),
             base_token_address: "0xbase".to_string(),
             quote_token_address: "0xquote".to_string(),
@@ -203,7 +203,7 @@ mod tests {
 
     fn make_pair(rows: Vec<CandidateRow>) -> PairRows {
         PairRows {
-            base_token_symbol: "WMATIC".to_string(),
+            base_token_symbol: "WETH".to_string(),
             quote_token_symbol: "USDC".to_string(),
             base_token_address: "0xbase".to_string(),
             quote_token_address: "0xquote".to_string(),

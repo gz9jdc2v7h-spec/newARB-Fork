@@ -64,12 +64,12 @@ class TestPyMath:
 
 # ─── Scanner tests ────────────────────────────────────────────────────────────
 
-def make_quote(pool: str, price: float, tvl: float, chain_id: int = 137) -> dict:
+def make_quote(pool: str, price: float, tvl: float, chain_id: int = 42161) -> dict:
     return {
         "chain_id": chain_id,
-        "protocol": "quick_swap_v2",
+        "protocol": "camelot_v2",
         "pool_address": pool,
-        "base_token": "WMATIC",
+        "base_token": "WETH",
         "quote_token": "USDC",
         "base_token_address": "0xbase",
         "quote_token_address": "0xquote",
@@ -152,10 +152,10 @@ class TestScanner:
     def test_candidates_sorted_by_spread(self):
         # Two different base/quote pairs
         quotes = [
-            # WMATIC/USDC: small spread
+            # WETH/USDC: small spread
             make_quote("0xpool_a", 0.80, 100_000.0),
             make_quote("0xpool_b", 0.82, 100_000.0),
-            # WMATIC/USDT: larger spread (different quote token)
+            # WETH/USDT: larger spread (different quote token)
             {**make_quote("0xpool_c", 0.70, 100_000.0), "quote_token": "USDT", "quote_token_address": "0xusdt"},
             {**make_quote("0xpool_d", 0.95, 100_000.0), "quote_token": "USDT", "quote_token_address": "0xusdt"},
         ]
@@ -194,10 +194,10 @@ class TestScanner:
 
     def test_raw_quote_type(self):
         rq = RawQuote(
-            chain_id=137,
-            protocol="quick_swap_v2",
+            chain_id=42161,
+            protocol="camelot_v2",
             pool_address="0xpool",
-            base_token="WMATIC",
+            base_token="WETH",
             quote_token="USDC",
             base_token_address="0xbase",
             quote_token_address="0xquote",

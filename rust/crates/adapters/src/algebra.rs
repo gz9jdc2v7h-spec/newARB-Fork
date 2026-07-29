@@ -1,6 +1,6 @@
-//! QuickSwap Algebra adapter — **separate model** per Apex-Omega canon.
+//! Camelot Algebra adapter — **separate model** per Apex-Omega canon.
 //!
-//! Algebra is an AMM descended from Uniswap V3 but uses its **own**
+//! Camelot V3 is an AMM descended from Uniswap V3 but uses its **own**
 //! factory, pool, and data-provider ABIs.  It must not be routed through
 //! the Uniswap V3 ABI path.
 //!
@@ -31,7 +31,7 @@ pub struct AlgebraGlobalState {
     pub unlocked: bool,
 }
 
-/// Pool context for a QuickSwap Algebra pool.
+/// Pool context for a Camelot Algebra pool.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AlgebraPoolContext {
     pub chain_id: u64,
@@ -100,7 +100,7 @@ impl AlgebraPoolContext {
 
         PoolQuote {
             chain_id: self.chain_id,
-            protocol: Protocol::QuickSwapAlgebra,
+            protocol: Protocol::CamelotAlgebra,
             pool_address: self.pool_address.clone(),
             base_token: base_symbol.to_string(),
             quote_token: quote_symbol.to_string(),
@@ -138,11 +138,11 @@ mod tests {
 
     fn make_context() -> AlgebraPoolContext {
         AlgebraPoolContext {
-            chain_id: 137,
-            pool_address: "0xEFGH".to_string(),
+            chain_id: 42161,
+            pool_address: "0xCAMELOT".to_string(),
             token0_address: "0x0000".to_string(),
             token1_address: "0x0001".to_string(),
-            token0_symbol: "WMATIC".to_string(),
+            token0_symbol: "WETH".to_string(),
             token1_symbol: "USDC".to_string(),
             token0_decimals: 18,
             token1_decimals: 6,
@@ -165,12 +165,12 @@ mod tests {
     fn test_algebra_quote_protocol_tag() {
         let ctx = make_context();
         let quote = ctx.approximate_quote(
-            "WMATIC", "0x0000",
-            "USDC",   "0x0001",
+            "WETH", "0x0000",
+            "USDC", "0x0001",
             1_000_000_000_000_000_000u128,
         );
-        // Must be tagged as Algebra, not UniswapV3
-        assert_eq!(quote.protocol, Protocol::QuickSwapAlgebra);
+        // Must be tagged as CamelotAlgebra, not UniswapV3
+        assert_eq!(quote.protocol, Protocol::CamelotAlgebra);
         assert_ne!(quote.protocol, Protocol::UniswapV3);
     }
 
@@ -184,7 +184,7 @@ mod tests {
     #[test]
     fn test_algebra_chain_id() {
         let ctx = make_context();
-        let quote = ctx.approximate_quote("WMATIC", "0x0000", "USDC", "0x0001", 1_000u128);
-        assert_eq!(quote.chain_id, 137);
+        let quote = ctx.approximate_quote("WETH", "0x0000", "USDC", "0x0001", 1_000u128);
+        assert_eq!(quote.chain_id, 42161);
     }
 }

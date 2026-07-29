@@ -21,7 +21,7 @@ except ImportError:
 
 
 class Scanner:
-    """Apex-Omega Chain-137 scanner.
+    """Apex-Omega Chain-42161 (Arbitrum One) scanner.
 
     Validates and ranks a batch of raw pool quotes using the executable-price
     doctrine.
@@ -81,7 +81,7 @@ class Scanner:
             ArbitrageCandidate, CandidateRow, ScanSummary,
         )
 
-        POLYGON_CHAIN_ID = 137
+        ARBITRUM_CHAIN_ID = 42161
         MIN_POOL_TVL_USD = 50_000.0
 
         total = len(raw_dicts)
@@ -89,7 +89,7 @@ class Scanner:
         valid_rows: list[CandidateRow] = []
 
         for q in raw_dicts:
-            if q.get("chain_id") != POLYGON_CHAIN_ID:
+            if q.get("chain_id") != ARBITRUM_CHAIN_ID:
                 wrong_chain += 1
                 continue
             tvl = q.get("pool_tvl_usd", 0.0) or 0.0
@@ -148,7 +148,7 @@ class Scanner:
             if sp <= bp:
                 continue
             candidates.append(ArbitrageCandidate(
-                chain_id=POLYGON_CHAIN_ID,
+                chain_id=ARBITRUM_CHAIN_ID,
                 base_token_symbol=rows[0].base_token_symbol,
                 quote_token_symbol=rows[0].quote_token_symbol,
                 base_token_address=base_addr,
@@ -165,7 +165,7 @@ class Scanner:
 
         return ScanResult(
             summary=ScanSummary(
-                chain_id=POLYGON_CHAIN_ID,
+                chain_id=ARBITRUM_CHAIN_ID,
                 scan_timestamp_ms=timestamp_ms,
                 total_quotes=total,
                 rejected_wrong_chain=wrong_chain,

@@ -1,4 +1,4 @@
-//! Output schema for the Apex-Omega Chain-137 scanner.
+//! Output schema for the Apex-Omega Chain-42161 (Arbitrum One) scanner.
 //!
 //! ### DNA doctrine
 //! Every field present in the original pool quote is preserved verbatim in
@@ -16,8 +16,8 @@
 use adapters::{PoolQuote, Protocol};
 use serde::{Deserialize, Serialize};
 
-/// Chain ID for all valid Polygon PoS candidates.
-pub const POLYGON_CHAIN_ID: u64 = 137;
+/// Chain ID for all valid Arbitrum One candidates.
+pub const ARBITRUM_CHAIN_ID: u64 = 42161;
 /// Minimum pool TVL in USD required for a valid candidate.
 pub const MIN_POOL_TVL_USD: f64 = 50_000.0;
 
@@ -145,7 +145,7 @@ pub struct ScanSummary {
     pub scan_timestamp_ms: u64,
     /// Total pool quotes collected.
     pub total_quotes: usize,
-    /// Quotes rejected because chain_id ≠ 137.
+    /// Quotes rejected because chain_id ≠ 42161.
     pub rejected_wrong_chain: usize,
     /// Quotes rejected because TVL < `MIN_POOL_TVL_USD`.
     pub rejected_low_tvl: usize,
@@ -193,10 +193,10 @@ mod tests {
 
     fn make_quote(pool: &str, price: f64, tvl: f64) -> PoolQuote {
         PoolQuote {
-            chain_id: 137,
-            protocol: Protocol::QuickSwapV2,
+            chain_id: 42161,
+            protocol: Protocol::CamelotV2,
             pool_address: pool.to_string(),
-            base_token: "WMATIC".to_string(),
+            base_token: "WETH".to_string(),
             quote_token: "USDC".to_string(),
             base_token_address: "0xbase".to_string(),
             quote_token_address: "0xquote".to_string(),
@@ -219,7 +219,7 @@ mod tests {
     fn test_candidate_row_from_quote() {
         let q = make_quote("0xpool", 0.85, 100_000.0);
         let row = CandidateRow::from_quote(&q);
-        assert_eq!(row.chain_id, 137);
+        assert_eq!(row.chain_id, 42161);
         assert!((row.buy_price_executable_usd_per_base - 0.85).abs() < 1e-9);
         assert!((row.sell_price_executable_usd_per_base - 0.85).abs() < 1e-9);
     }
@@ -228,7 +228,7 @@ mod tests {
     fn test_scan_result_serialisation() {
         let result = ScanResult {
             summary: ScanSummary {
-                chain_id: 137,
+                chain_id: 42161,
                 scan_timestamp_ms: 0,
                 total_quotes: 0,
                 rejected_wrong_chain: 0,
@@ -241,6 +241,6 @@ mod tests {
             candidates: vec![],
         };
         let json = result.to_json().expect("serialisation failed");
-        assert!(json.contains("\"chain_id\":137"));
+        assert!(json.contains("\"chain_id\":42161"));
     }
 }

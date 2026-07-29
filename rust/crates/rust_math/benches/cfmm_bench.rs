@@ -16,10 +16,10 @@ fn bench_isqrt(c: &mut Criterion) {
 // ─── CFMM amount out ─────────────────────────────────────────────────────────
 
 fn bench_cfmm_amount_out(c: &mut Criterion) {
-    // Typical Polygon pool: WMATIC/USDC, 10k WMATIC / 8k USDC
-    let reserve_in: u128 = 10_000 * 10u128.pow(18); // 10k WMATIC (18 dec)
-    let reserve_out: u128 = 8_000 * 10u128.pow(6);  //  8k USDC   ( 6 dec)
-    let amount_in: u128 = 10u128.pow(18);             //  1 WMATIC
+    // Typical Arbitrum pool: WETH/USDC, 10k WETH / 8k USDC
+    let reserve_in: u128 = 10_000 * 10u128.pow(18); // 10k WETH (18 dec)
+    let reserve_out: u128 = 8_000 * 10u128.pow(6);  //  8k USDC  ( 6 dec)
+    let amount_in: u128 = 10u128.pow(18);             //  1 WETH
 
     c.bench_function("cfmm_amount_out/typical", |b| {
         b.iter(|| {

@@ -21,10 +21,10 @@ use serde::{Deserialize, Serialize};
 pub enum Protocol {
     UniswapV2,
     SushiSwapV2,
-    QuickSwapV2,
+    CamelotV2,
     UniswapV3,
-    /// QuickSwap Algebra (separate from UniswapV3 — Apex-Omega canon).
-    QuickSwapAlgebra,
+    /// Camelot V3 uses the Algebra AMM model (separate from UniswapV3 — Apex-Omega canon).
+    CamelotAlgebra,
     /// Any other constant-product V2-compatible AMM.
     GenericV2,
 }
@@ -46,7 +46,7 @@ pub enum SwapDirection {
 /// - `pool_tvl_usd` is the USD value of both reserves combined
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PoolQuote {
-    /// Chain ID — must be 137 for all valid Polygon candidates.
+    /// Chain ID — must be 42161 for all valid Arbitrum One candidates.
     pub chain_id: u64,
     /// Protocol type.
     pub protocol: Protocol,

@@ -33,7 +33,8 @@ pub const Q96: u128 = 1u128 << 96;
 
 /// Integer square root ⌊√n⌋ via Babylonian method.
 ///
-/// Uses wrapping-safe arithmetic to handle u128::MAX.
+/// Uses safe u128 arithmetic — `x + n/x` fits in u128 because the initial
+/// estimate x ≤ 2^65 and n/x ≤ 2^64 throughout the iteration.
 /// Guaranteed termination: for u128 the loop runs at most 128 iterations
 /// (in practice ≤ 64).
 pub fn isqrt(n: u128) -> u128 {
@@ -44,8 +45,9 @@ pub fn isqrt(n: u128) -> u128 {
     let bits = 128u32 - n.leading_zeros();
     let mut x = 1u128 << ((bits + 1) / 2);
     loop {
-        // y = (x + n/x) / 2  — use saturating to stay within u128
-        let y = x / 2 + n / x / 2 + (x % 2) * (n / x % 2) / 2;
+        // Standard Babylonian step: y = ⌊(x + n/x) / 2⌋
+        // Safe: x ≤ 2^65 and n/x ≤ 2^64, so x + n/x ≤ 2^66 < u128::MAX.
+        let y = (x + n / x) / 2;
         if y >= x {
             return x;
         }

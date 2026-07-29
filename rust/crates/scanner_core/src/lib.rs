@@ -1,7 +1,7 @@
 //! # scanner_core
 //!
 //! Core domain types, output schema, and scan-level orchestration for the
-//! Apex-Omega Chain-137 scanner.
+//! Apex-Omega Chain-42161 (Arbitrum One) scanner.
 //!
 //! ## Output schema
 //!
@@ -15,4 +15,4 @@
 pub mod schema;
 
 pub use schema::{ArbitrageCandidate, CandidateRow, ScanResult, ScanSummary};
-pub use schema::{MIN_POOL_TVL_USD, POLYGON_CHAIN_ID};
+pub use schema::{ARBITRUM_CHAIN_ID, MIN_POOL_TVL_USD};

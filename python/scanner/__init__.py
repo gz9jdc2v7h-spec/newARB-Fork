@@ -1,5 +1,5 @@
 """
-Apex-Omega Chain-137 Scanner — Python wrapper.
+Apex-Omega Chain-42161 (Arbitrum One) Scanner — Python wrapper.
 
 This package wraps the Rust/PyO3 `scanner_pyo3` extension module with a
 Pythonic API.  Install the Rust extension with::

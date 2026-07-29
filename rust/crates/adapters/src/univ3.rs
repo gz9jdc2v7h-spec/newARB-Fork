@@ -117,17 +117,17 @@ mod tests {
 
     fn make_context() -> UniV3PoolContext {
         UniV3PoolContext {
-            chain_id: 137,
+            chain_id: 42161,
             pool_address: "0xABCD".to_string(),
             token0_address: "0x0000".to_string(),
             token1_address: "0x0001".to_string(),
-            token0_symbol: "WMATIC".to_string(),
+            token0_symbol: "WETH".to_string(),
             token1_symbol: "USDC".to_string(),
             token0_decimals: 18,
             token1_decimals: 6,
             fee_ppm: 3000,
             slot0: V3Slot0 {
-                // sqrtPriceX96 for WMATIC ≈ $0.80: sqrt(0.80e12) × 2^96
+                // sqrtPriceX96 for WETH ≈ $0.80 relative to USDC scale: sqrt(0.80e12) × 2^96
                 sqrt_price_x96: 56_022_770_974_786_143_748_341_760,
                 tick: -3_000,
                 observation_index: 0,
@@ -144,13 +144,13 @@ mod tests {
     fn test_approximate_quote_returns_nonzero() {
         let ctx = make_context();
         let quote = ctx.approximate_quote(
-            "WMATIC", "0x0000",
-            "USDC",   "0x0001",
-            1_000_000_000_000_000_000u128, // 1 WMATIC (18 dec)
+            "WETH", "0x0000",
+            "USDC", "0x0001",
+            1_000_000_000_000_000_000u128, // 1 WETH (18 dec)
         );
         assert!(quote.executable_price > 0.0, "expected positive price, got {}", quote.executable_price);
         assert_eq!(quote.protocol, Protocol::UniswapV3);
-        assert_eq!(quote.chain_id, 137);
+        assert_eq!(quote.chain_id, 42161);
     }
 
     #[test]

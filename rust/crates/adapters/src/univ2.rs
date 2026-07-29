@@ -1,4 +1,4 @@
-//! UniswapV2-compatible adapter (SushiSwap V2, QuickSwap V2, GenericV2).
+//! UniswapV2-compatible adapter (SushiSwap V2, Camelot V2, GenericV2).
 //!
 //! Uses exact constant-product reserves for all calculations.
 
@@ -102,17 +102,17 @@ mod tests {
 
     fn make_context() -> UniV2PoolContext {
         UniV2PoolContext {
-            chain_id: 137,
-            protocol: Protocol::QuickSwapV2,
-            pool_address: "0xQS".to_string(),
+            chain_id: 42161,
+            protocol: Protocol::CamelotV2,
+            pool_address: "0xCAM".to_string(),
             token0_address: "0x0000".to_string(),
             token1_address: "0x0001".to_string(),
-            token0_symbol: "WMATIC".to_string(),
+            token0_symbol: "WETH".to_string(),
             token1_symbol: "USDC".to_string(),
             token0_decimals: 18,
             token1_decimals: 6,
             fee_ppm: 3000,
-            reserve0: 10_000_000_000_000_000_000_000u128, // 10000 WMATIC
+            reserve0: 10_000_000_000_000_000_000_000u128, // 10000 WETH
             reserve1: 8_000_000_000u128,                  // 8000 USDC (6 dec)
             tvl_usd: 16_000.0,
             timestamp_ms: 0,
@@ -123,20 +123,20 @@ mod tests {
     fn test_univ2_quote_price() {
         let ctx = make_context();
         let quote = ctx.quote(
-            "WMATIC", "0x0000",
-            "USDC",   "0x0001",
-            1_000_000_000_000_000_000u128, // 1 WMATIC
+            "WETH", "0x0000",
+            "USDC", "0x0001",
+            1_000_000_000_000_000_000u128, // 1 WETH
         );
-        // Price ≈ 8000/10000 = 0.8 USDC per WMATIC (minus fee)
+        // Price ≈ 8000/10000 = 0.8 USDC per WETH (minus fee)
         assert!(quote.executable_price > 0.7 && quote.executable_price < 0.9,
             "expected ~0.8, got {}", quote.executable_price);
-        assert_eq!(quote.protocol, Protocol::QuickSwapV2);
+        assert_eq!(quote.protocol, Protocol::CamelotV2);
     }
 
     #[test]
     fn test_univ2_reserves_preserved() {
         let ctx = make_context();
-        let quote = ctx.quote("WMATIC", "0x0000", "USDC", "0x0001", 1_000_000u128);
+        let quote = ctx.quote("WETH", "0x0000", "USDC", "0x0001", 1_000_000u128);
         assert!(quote.reserve_base_raw.is_some());
         assert!(quote.reserve_quote_raw.is_some());
         assert!(quote.sqrt_price_x96.is_none());

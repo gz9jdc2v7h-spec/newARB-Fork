@@ -9,8 +9,8 @@
 //!
 //! # Validate a single quote dict
 //! result = sc.validate_quote_dict({
-//!     "chain_id": 137,
-//!     "protocol": "quick_swap_v2",
+//!     "chain_id": 42161,
+//!     "protocol": "camelot_v2",
 //!     "pool_address": "0x...",
 //!     ...
 //!     "executable_price": 0.85,
@@ -40,9 +40,9 @@ fn parse_protocol(s: &str) -> PyResult<Protocol> {
     match s {
         "uniswap_v2"       => Ok(Protocol::UniswapV2),
         "sushi_swap_v2"    => Ok(Protocol::SushiSwapV2),
-        "quick_swap_v2"    => Ok(Protocol::QuickSwapV2),
+        "camelot_v2"       => Ok(Protocol::CamelotV2),
         "uniswap_v3"       => Ok(Protocol::UniswapV3),
-        "quick_swap_algebra" => Ok(Protocol::QuickSwapAlgebra),
+        "camelot_algebra"  => Ok(Protocol::CamelotAlgebra),
         "generic_v2"       => Ok(Protocol::GenericV2),
         other => Err(PyValueError::new_err(format!("Unknown protocol: {other}"))),
     }
@@ -189,7 +189,7 @@ fn scan_batch_json(quotes_json: &str, timestamp_ms: u64) -> PyResult<String> {
 
     let result = ScanResult {
         summary: ScanSummary {
-            chain_id: 137,
+            chain_id: 42161,
             scan_timestamp_ms: timestamp_ms,
             total_quotes,
             rejected_wrong_chain,
@@ -247,7 +247,7 @@ fn cfmm_amount_out(reserve_in: u128, reserve_out: u128, amount_in: u128, fee_bps
 
 // ─── Module registration ──────────────────────────────────────────────────────
 
-/// Apex-Omega Chain-137 scanner — Rust/PyO3 core.
+/// Apex-Omega Chain-42161 (Arbitrum One) scanner — Rust/PyO3 core.
 #[pymodule]
 fn scanner_pyo3(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(validate_quote_json, m)?)?;
@@ -258,7 +258,7 @@ fn scanner_pyo3(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(cfmm_optimal_input, m)?)?;
     m.add_function(wrap_pyfunction!(cfmm_amount_out, m)?)?;
     // Expose constants
-    m.add("POLYGON_CHAIN_ID", 137u64)?;
+    m.add("ARBITRUM_CHAIN_ID", 42161u64)?;
     m.add("MIN_POOL_TVL_USD", 50_000.0f64)?;
     Ok(())
 }

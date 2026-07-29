@@ -3,7 +3,7 @@
 //! Enforces all Apex-Omega gate laws before a row enters the ranking engine.
 //!
 //! ## Gate laws (all must pass)
-//! 1. `chain_id == 137`
+//! 1. `chain_id == 42161`
 //! 2. `pool_tvl_usd >= 50_000`
 //! 3. Live executable quote exists (`executable_price > 0`)
 //! 4. ≥ 2 comparable executable destinations (enforced by the ranker post-validation)
@@ -15,13 +15,13 @@
 //! This module validates individual rows (laws 1–3).
 
 use adapters::PoolQuote;
-use scanner_core::{CandidateRow, MIN_POOL_TVL_USD, POLYGON_CHAIN_ID};
+use scanner_core::{CandidateRow, MIN_POOL_TVL_USD, ARBITRUM_CHAIN_ID};
 use serde::{Deserialize, Serialize};
 
 /// Reason a row was rejected by the validator.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ValidationError {
-    /// `chain_id != 137`
+    /// `chain_id != 42161`
     WrongChain { found: u64 },
     /// `pool_tvl_usd < MIN_POOL_TVL_USD`  (includes missing/unknown TVL)
     TvlBelowGate { tvl_usd: u64 },
@@ -33,7 +33,7 @@ impl std::fmt::Display for ValidationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ValidationError::WrongChain { found } =>
-                write!(f, "wrong chain: expected {POLYGON_CHAIN_ID}, got {found}"),
+                write!(f, "wrong chain: expected {ARBITRUM_CHAIN_ID}, got {found}"),
             ValidationError::TvlBelowGate { tvl_usd } =>
                 write!(f, "TVL ${tvl_usd} below gate ${}", MIN_POOL_TVL_USD as u64),
             ValidationError::NoLiveQuote =>
@@ -55,8 +55,8 @@ pub enum ValidationResult {
 ///
 /// Laws 4–7 (pair-level) are enforced separately by the ranking engine.
 pub fn validate_quote(quote: &PoolQuote) -> ValidationResult {
-    // Gate 1: chain_id must be 137
-    if quote.chain_id != POLYGON_CHAIN_ID {
+    // Gate 1: chain_id must be 42161
+    if quote.chain_id != ARBITRUM_CHAIN_ID {
         return ValidationResult::Invalid(ValidationError::WrongChain { found: quote.chain_id });
     }
 
@@ -100,9 +100,9 @@ mod tests {
     fn make_quote(chain_id: u64, tvl: f64, price: f64) -> PoolQuote {
         PoolQuote {
             chain_id,
-            protocol: Protocol::QuickSwapV2,
+            protocol: Protocol::CamelotV2,
             pool_address: "0xpool".to_string(),
-            base_token: "WMATIC".to_string(),
+            base_token: "WETH".to_string(),
             quote_token: "USDC".to_string(),
             base_token_address: "0xbase".to_string(),
             quote_token_address: "0xquote".to_string(),
@@ -123,7 +123,7 @@ mod tests {
 
     #[test]
     fn test_valid_quote_passes() {
-        let q = make_quote(137, 100_000.0, 0.85);
+        let q = make_quote(42161, 100_000.0, 0.85);
         assert!(matches!(validate_quote(&q), ValidationResult::Valid(_)));
     }
 
@@ -138,7 +138,7 @@ mod tests {
 
     #[test]
     fn test_low_tvl_rejected() {
-        let q = make_quote(137, 49_999.99, 0.85);
+        let q = make_quote(42161, 49_999.99, 0.85);
         match validate_quote(&q) {
             ValidationResult::Invalid(ValidationError::TvlBelowGate { .. }) => {}
             other => panic!("expected TvlBelowGate, got {other:?}"),
@@ -147,7 +147,7 @@ mod tests {
 
     #[test]
     fn test_zero_tvl_rejected() {
-        let q = make_quote(137, 0.0, 0.85);
+        let q = make_quote(42161, 0.0, 0.85);
         match validate_quote(&q) {
             ValidationResult::Invalid(ValidationError::TvlBelowGate { .. }) => {}
             other => panic!("expected TvlBelowGate, got {other:?}"),
@@ -156,13 +156,13 @@ mod tests {
 
     #[test]
     fn test_exactly_50k_tvl_passes() {
-        let q = make_quote(137, 50_000.0, 0.85);
+        let q = make_quote(42161, 50_000.0, 0.85);
         assert!(matches!(validate_quote(&q), ValidationResult::Valid(_)));
     }
 
     #[test]
     fn test_zero_price_rejected() {
-        let q = make_quote(137, 100_000.0, 0.0);
+        let q = make_quote(42161, 100_000.0, 0.0);
         match validate_quote(&q) {
             ValidationResult::Invalid(ValidationError::NoLiveQuote) => {}
             other => panic!("expected NoLiveQuote, got {other:?}"),
@@ -171,7 +171,7 @@ mod tests {
 
     #[test]
     fn test_nan_price_rejected() {
-        let q = make_quote(137, 100_000.0, f64::NAN);
+        let q = make_quote(42161, 100_000.0, f64::NAN);
         match validate_quote(&q) {
             ValidationResult::Invalid(ValidationError::NoLiveQuote) => {}
             other => panic!("expected NoLiveQuote, got {other:?}"),
@@ -180,7 +180,7 @@ mod tests {
 
     #[test]
     fn test_nan_tvl_rejected() {
-        let q = make_quote(137, f64::NAN, 0.85);
+        let q = make_quote(42161, f64::NAN, 0.85);
         match validate_quote(&q) {
             ValidationResult::Invalid(ValidationError::TvlBelowGate { .. }) => {}
             other => panic!("expected TvlBelowGate, got {other:?}"),
@@ -190,10 +190,10 @@ mod tests {
     #[test]
     fn test_validate_batch_counts() {
         let quotes = vec![
-            make_quote(137, 100_000.0, 0.85),  // valid
-            make_quote(1,   100_000.0, 0.85),   // wrong chain
-            make_quote(137, 10_000.0, 0.85),    // low TVL
-            make_quote(137, 100_000.0, 0.0),    // no price
+            make_quote(42161, 100_000.0, 0.85),  // valid
+            make_quote(1,     100_000.0, 0.85),   // wrong chain
+            make_quote(42161, 10_000.0, 0.85),    // low TVL
+            make_quote(42161, 100_000.0, 0.0),    // no price
         ];
         let (valid, errors) = validate_batch(&quotes);
         assert_eq!(valid.len(), 1);
