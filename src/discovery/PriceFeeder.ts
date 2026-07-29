@@ -259,82 +259,82 @@ async function quoteUniV3(
     } catch {
       // Pool may not exist for this fee tier — skip
     }
+  }
 
-    // ─── Balancer quote ───────────────────────────────────────────────────────────
+  return best;
+}
 
-    async function quoteBalancer(
-      provider: ethers.Provider,
-      dex: DexConfig,
-      tokenInSym: string,
-      tokenOutSym: string,
-      amountIn: bigint
-    ): Promise<PriceQuote | null> {
-      if (!dex.vault) return null;
+// ─── Balancer quote ───────────────────────────────────────────────────────────
 
-      const tokenIn = token(tokenInSym);
-      const tokenOut = token(tokenOutSym);
-      const vault = new ethers.Contract(dex.vault, BALANCER_VAULT_ABI, provider);
-      const candidatePools = await discoverBalancerPoolsForPair(
-        provider,
-        dex.vault,
-        tokenIn.address,
-        tokenOut.address
-      );
-      if (candidatePools.length === 0) return null;
+async function quoteBalancer(
+  provider: ethers.Provider,
+  dex: DexConfig,
+  tokenInSym: string,
+  tokenOutSym: string,
+  amountIn: bigint
+): Promise<PriceQuote | null> {
+  if (!dex.vault) return null;
 
-      let best: PriceQuote | null = null;
+  const tokenIn = token(tokenInSym);
+  const tokenOut = token(tokenOutSym);
+  const vault = new ethers.Contract(dex.vault, BALANCER_VAULT_ABI, provider);
+  const candidatePools = await discoverBalancerPoolsForPair(
+    provider,
+    dex.vault,
+    tokenIn.address,
+    tokenOut.address
+  );
+  if (candidatePools.length === 0) return null;
 
-      for (const poolId of candidatePools) {
-        try {
-          const deltas: bigint[] = await withRetry(() =>
-            vault.queryBatchSwap.staticCall(
-              0, // GIVEN_IN
-              [
-                {
-                  poolId,
-                  assetInIndex: 0n,
-                  assetOutIndex: 1n,
-                  amount: amountIn,
-                  userData: "0x",
-                },
-              ],
-              [tokenIn.address, tokenOut.address],
-              {
-                sender: ethers.ZeroAddress,
-                fromInternalBalance: false,
-                recipient: ethers.ZeroAddress,
-                toInternalBalance: false,
-              }
-            )
-          );
+  let best: PriceQuote | null = null;
 
-          if (deltas.length < 2) continue;
-          const amountOut = deltas[1] < 0n ? -deltas[1] : 0n;
-          if (amountOut <= 0n) continue;
-
-          const price =
-            toFloat(amountOut, tokenOut.decimals) /
-            toFloat(amountIn, tokenIn.decimals);
-
-          if (!best || amountOut > best.amountOut) {
-            best = {
-              dex: dex.name,
-              tokenIn: tokenInSym,
-              tokenOut: tokenOutSym,
-              amountIn,
-              amountOut,
-              price,
-              gasEstimate: 170_000n,
-              timestamp: Date.now(),
+  for (const poolId of candidatePools) {
+    try {
+      const deltas: bigint[] = await withRetry(() =>
+        vault.queryBatchSwap.staticCall(
+          0, // GIVEN_IN
+          [
+            {
               poolId,
-            };
+              assetInIndex: 0n,
+              assetOutIndex: 1n,
+              amount: amountIn,
+              userData: "0x",
+            },
+          ],
+          [tokenIn.address, tokenOut.address],
+          {
+            sender: ethers.ZeroAddress,
+            fromInternalBalance: false,
+            recipient: ethers.ZeroAddress,
+            toInternalBalance: false,
           }
-        } catch {
-          // Pool may reject this path/amount — skip
-        }
-      }
+        )
+      );
 
-      return best;
+      if (deltas.length < 2) continue;
+      const amountOut = deltas[1] < 0n ? -deltas[1] : 0n;
+      if (amountOut <= 0n) continue;
+
+      const price =
+        toFloat(amountOut, tokenOut.decimals) /
+        toFloat(amountIn, tokenIn.decimals);
+
+      if (!best || amountOut > best.amountOut) {
+        best = {
+          dex: dex.name,
+          tokenIn: tokenInSym,
+          tokenOut: tokenOutSym,
+          amountIn,
+          amountOut,
+          price,
+          gasEstimate: 170_000n,
+          timestamp: Date.now(),
+          poolId,
+        };
+      }
+    } catch {
+      // Pool may reject this path/amount — skip
     }
   }
 

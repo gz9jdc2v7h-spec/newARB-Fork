@@ -255,11 +255,13 @@ export class Executor {
         if (!sellQuote.poolId || !sellDexCfg.vault) {
           throw new Error(`Missing Balancer pool metadata for ${sellQuote.dex}`);
         }
+        const sellVault = sellDexCfg.vault;
+        const sellPoolId = sellQuote.poolId;
         receipt1 = await withRetry(() =>
           executeBalancerSwap(
             this.wallet,
-            sellDexCfg.vault,
-            sellQuote.poolId!,
+            sellVault,
+            sellPoolId,
             tokenInCfg.address,
             tokenOutCfg.address,
             tradeAmountIn,
@@ -313,11 +315,13 @@ export class Executor {
         if (!buyQuote.poolId || !buyDexCfg.vault) {
           throw new Error(`Missing Balancer pool metadata for ${buyQuote.dex}`);
         }
+        const buyVault = buyDexCfg.vault;
+        const buyPoolId = buyQuote.poolId;
         receipt2 = await withRetry(() =>
           executeBalancerSwap(
             this.wallet,
-            buyDexCfg.vault,
-            buyQuote.poolId!,
+            buyVault,
+            buyPoolId,
             tokenOutCfg.address,
             tokenInCfg.address,
             actualOut1,
