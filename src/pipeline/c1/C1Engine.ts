@@ -42,13 +42,8 @@ const C1_INTERFACE = new Interface([
   'function initBalancerFlash(address borrowAsset, uint256 borrowAmount, bytes encodedRoutePayload)',
 ]);
 
-const AAVE_SELECTOR = getRequiredSelector(C1_FUNCTIONS.aave);
-const BALANCER_SELECTOR = getRequiredSelector(C1_FUNCTIONS.balancer);
-
-export const C1_SELECTORS: Record<C1FlashProvider, string> = {
-  aave: AAVE_SELECTOR,
-  balancer: BALANCER_SELECTOR,
-};
+assertC1Function(C1_FUNCTIONS.aave);
+assertC1Function(C1_FUNCTIONS.balancer);
 
 // ── Input to C1 execution ─────────────────────────────────────────────────────
 
@@ -194,10 +189,9 @@ function encodeC1Calldata(req: C1ExecutionRequest): string {
   );
 }
 
-function getRequiredSelector(name: (typeof C1_FUNCTIONS)[C1FlashProvider]): string {
+function assertC1Function(name: (typeof C1_FUNCTIONS)[C1FlashProvider]): void {
   const fragment = C1_INTERFACE.getFunction(name);
   if (!fragment) {
     throw new Error(`C1Engine: missing ABI fragment for ${name}`);
   }
-  return fragment.selector;
 }

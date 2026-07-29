@@ -95,7 +95,7 @@ export class ApexTxSubmitter implements TxSubmitter {
   async sign(request: ApexTxRequest): Promise<SignedTx> {
     const signed = await this.ethersAdapter.sign(request);
     const cacheKey: SignedRequestCacheKey = keccak256(signed.rawTx);
-    this.evictCachedRequest(cacheKey);
+    this.ensureCacheCapacityFor(cacheKey);
     this.signedRequestCache.set(cacheKey, request);
     return signed;
   }
@@ -209,12 +209,11 @@ export class ApexTxSubmitter implements TxSubmitter {
     };
   }
 
-  private evictCachedRequest(cacheKey: SignedRequestCacheKey): void {
-    if (this.signedRequestCache.has(cacheKey)) {
-      return;
-    }
-
-    if (this.signedRequestCache.size < MAX_CACHED_SIGNED_REQUESTS) {
+  private ensureCacheCapacityFor(cacheKey: SignedRequestCacheKey): void {
+    if (
+      this.signedRequestCache.has(cacheKey) ||
+      this.signedRequestCache.size < MAX_CACHED_SIGNED_REQUESTS
+    ) {
       return;
     }
 

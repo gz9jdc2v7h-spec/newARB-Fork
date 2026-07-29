@@ -17,8 +17,8 @@ import { kellyScore } from "../math/KellyCriterion";
 import { EmaTracker, classifyRegime } from "../math/EmaTracker";
 import { selectOptimalPortfolio, PortfolioSelection } from "../math/QuantumSelector";
 
-// Never suppress liquidity depth below 10% of the raw Kelly score so shallow
-// pools are penalized without collapsing otherwise-profitable opportunities.
+// Preserve at least 10% of the raw Kelly score so shallow pools are penalized
+// without collapsing otherwise-profitable opportunities to zero.
 const MIN_DEPTH_PENALTY = 0.1;
 
 export interface ArbitrageOpportunity {

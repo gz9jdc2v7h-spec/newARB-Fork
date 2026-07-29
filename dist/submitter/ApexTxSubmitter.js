@@ -154,7 +154,6 @@ class ApexTxSubmitter {
     }
     evictCachedRequest(cacheKey) {
         if (this.signedRequestCache.has(cacheKey)) {
-            this.signedRequestCache.delete(cacheKey);
             return;
         }
         if (this.signedRequestCache.size < MAX_CACHED_SIGNED_REQUESTS) {

@@ -229,9 +229,9 @@ export class PrivateRelaySubmitter {
     }
 
     const targetBlock = request.blockNumber + 1;
-    if (request.expiresAtBlock <= targetBlock) {
+    if (request.expiresAtBlock < targetBlock) {
       throw new Error(
-        `Flashbots bundle expires at or before the next block: expiresAtBlock=${request.expiresAtBlock}, nextBlock=${targetBlock}`,
+        `Flashbots bundle expires before the next block: expiresAtBlock=${request.expiresAtBlock}, nextBlock=${targetBlock}`,
       );
     }
 
