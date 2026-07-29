@@ -241,7 +241,6 @@ export class PrivateRelaySubmitter {
         {
           txs: [signed.rawTx],
           blockNumber: toRpcQuantity(targetBlock),
-          minTimestamp: Math.floor(Date.now() / 1000),
           revertingTxHashes: [],
         },
       ],

@@ -28,6 +28,8 @@ import { EthersV6Adapter } from '../adapters/EthersV6Adapter.js';
 import { PrivateRelaySubmitter } from '../relay/PrivateRelaySubmitter.js';
 import { AuditLogger } from '../pipeline/transparency/AuditLogger.js';
 
+const MAX_CACHED_SIGNED_REQUESTS = 512;
+
 export interface ApexTxSubmitterConfig {
   /** JSON-RPC URL for signing and receipt polling. */
   rpcUrl: string;
@@ -91,7 +93,9 @@ export class ApexTxSubmitter implements TxSubmitter {
 
   async sign(request: ApexTxRequest): Promise<SignedTx> {
     const signed = await this.ethersAdapter.sign(request);
-    this.signedRequestCache.set(keccak256(signed.rawTx), request);
+    const cacheKey = keccak256(signed.rawTx);
+    this.evictCachedRequest(cacheKey);
+    this.signedRequestCache.set(cacheKey, request);
     return signed;
   }
 
@@ -202,5 +206,21 @@ export class ApexTxSubmitter implements TxSubmitter {
       stateHash: request.stateHash,
       configHash: request.configHash,
     };
+  }
+
+  private evictCachedRequest(cacheKey: string): void {
+    if (this.signedRequestCache.has(cacheKey)) {
+      this.signedRequestCache.delete(cacheKey);
+      return;
+    }
+
+    if (this.signedRequestCache.size < MAX_CACHED_SIGNED_REQUESTS) {
+      return;
+    }
+
+    const oldestKey = this.signedRequestCache.keys().next().value;
+    if (oldestKey) {
+      this.signedRequestCache.delete(oldestKey);
+    }
   }
 }

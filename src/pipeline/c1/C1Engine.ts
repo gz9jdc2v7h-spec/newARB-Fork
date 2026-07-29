@@ -38,8 +38,8 @@ const C1_FUNCTIONS = {
 } as const;
 
 const C1_INTERFACE = new Interface([
-  'function initAaveFlash(address,uint256,bytes)',
-  'function initBalancerFlash(address,uint256,bytes)',
+  'function initAaveFlash(address borrowAsset, uint256 borrowAmount, bytes encodedRoutePayload)',
+  'function initBalancerFlash(address borrowAsset, uint256 borrowAmount, bytes encodedRoutePayload)',
 ]);
 
 const AAVE_SELECTOR = getRequiredSelector(C1_FUNCTIONS.aave);
