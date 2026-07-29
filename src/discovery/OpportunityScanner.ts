@@ -12,6 +12,7 @@ import { pLimit } from "../utils/helpers";
 import { logger } from "../utils/logger";
 import { fetchQuote, PriceQuote } from "./PriceFeeder";
 import { RuntimeEventStream } from "../runtime/RuntimeEventStream";
+import { MempoolFilter } from "./MempoolFilter";
 
 export interface PairQuotes {
   tokenIn: string;
@@ -92,6 +93,7 @@ export class OpportunityScanner {
   private running = false;
   private readonly eventStream?: RuntimeEventStream;
   private lastPolledBlock: number | null = null;
+  private mempoolFilter: MempoolFilter | null = null;
 
   constructor(
     provider: ethers.Provider,
@@ -126,27 +128,60 @@ export class OpportunityScanner {
 
     if (this.wsProvider) {
       logger.info("Using WebSocket subscription for block events");
-      this.wsProvider.on("block", async (blockNumber: number) => {
-        this.eventStream?.publishBlock(blockNumber, "ws_block");
-        logger.debug(`New block: ${blockNumber}`);
-        await scanAndEmit();
-      });
-      if (ENABLE_PENDING_FEED) {
+
+      // ── Mempool filter setup ──────────────────────────────────────────────
+      if (ENABLE_PENDING_FEED && this.eventStream) {
+        const routerAddresses = DEXES.map((d) => d.router);
+        this.mempoolFilter = new MempoolFilter(
+          this.provider,
+          this.eventStream,
+          routerAddresses,
+          MAX_PENDING_TX_PER_BLOCK
+        );
         this.wsProvider.on("pending", (txHash: string) => {
-          const accepted =
-            this.eventStream?.publishPendingTx(
-              txHash,
-              "ws_pending",
-              MAX_PENDING_TX_PER_BLOCK
-            ) ?? false;
-          if (!accepted) {
-            logger.debug("Pending tx dropped by backpressure", {
-              txHash,
-              maxPerBlock: MAX_PENDING_TX_PER_BLOCK,
-            });
+          try {
+            this.mempoolFilter?.ingest(txHash);
+          } catch (err) {
+            logger.debug("Pending feed error", { txHash, err: String(err) });
+          }
+        });
+        this.eventStream.publishHealth(
+          "ws",
+          "ok",
+          "Mempool filter active with swap-selector and router filtering",
+          "ws_pending"
+        );
+      } else if (ENABLE_PENDING_FEED) {
+        // Fallback: no eventStream — use raw publish (preserves backward compat)
+        this.wsProvider.on("pending", (txHash: string) => {
+          try {
+            const accepted =
+              this.eventStream?.publishPendingTx(
+                txHash,
+                "ws_pending",
+                MAX_PENDING_TX_PER_BLOCK
+              ) ?? false;
+            if (!accepted) {
+              logger.debug("Pending tx dropped by backpressure", {
+                txHash,
+                maxPerBlock: MAX_PENDING_TX_PER_BLOCK,
+              });
+            }
+          } catch (err) {
+            logger.debug("Pending feed error", { txHash, err: String(err) });
           }
         });
       }
+
+      // ── Block subscription ────────────────────────────────────────────────
+      this.wsProvider.on("block", async (blockNumber: number) => {
+        this.eventStream?.publishBlock(blockNumber, "ws_block");
+        logger.debug(`New block: ${blockNumber}`);
+        // Reset mempool filter counters for the new block
+        this.mempoolFilter?.onNewBlock();
+        await scanAndEmit();
+      });
+
       this.eventStream?.publishHealth("ws", "ok", "WebSocket block feed active", "ws_block");
     } else {
       logger.info("WebSocket unavailable — falling back to HTTP polling");
@@ -177,6 +212,8 @@ export class OpportunityScanner {
 
   stop(): void {
     this.running = false;
+    this.mempoolFilter?.destroy();
+    this.mempoolFilter = null;
     if (this.wsProvider) {
       this.wsProvider.removeAllListeners("block");
       this.wsProvider.removeAllListeners("pending");
