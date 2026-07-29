@@ -84,7 +84,7 @@ function ethPriceUsd(snapshot: PairQuotes[]): number {
  *   2. Derived from a tokenIn/WETH pair:  price_usd = quote.price × ethUsd
  *   3. Derived from a tokenIn/stablecoin pair: price_usd = quote.price × stablecoin_price
  *
- * This correctly prices WBTC, ARB and any other token present in the snapshot
+ * This correctly prices WBTC, WMATIC and any other token present in the snapshot
  * instead of treating their raw units as dollars.
  */
 function buildTokenPricesUsd(snapshot: PairQuotes[], ethUsd: number): Map<string, number> {
@@ -388,7 +388,7 @@ export class OpportunityRanker {
         if (grossProfitRaw <= 0n) continue;
 
         // Convert exact raw profit to USD using the per-token price oracle.
-        // This correctly handles WETH, stablecoins, WBTC, ARB and any other
+        // This correctly handles WETH, stablecoins, WBTC, WMATIC and any other
         // token present in the snapshot — previous code wrongly fell back to
         // treating non-WETH token units as dollars.
         const tokenInPriceUsd = tokenPrices.get(tokenIn);
@@ -461,4 +461,3 @@ export class OpportunityRanker {
     return results;
   }
 }
-

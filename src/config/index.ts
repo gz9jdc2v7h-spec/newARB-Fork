@@ -11,18 +11,44 @@ function optionalEnv(key: string, defaultValue: string): string {
   return process.env[key] ?? defaultValue;
 }
 
+function csvEnv(key: string, defaultValue: string[]): string[] {
+  const raw = process.env[key];
+  if (!raw) return defaultValue;
+  return raw
+    .split(",")
+    .map((v) => v.trim())
+    .filter((v) => v.length > 0);
+}
+
 // ─── Network ────────────────────────────────────────────────────────────────
-export const CHAIN_ID = 42161; // Arbitrum One
+export const CHAIN_ID = 137; // Polygon PoS
 
 export const RPC_HTTP = optionalEnv(
-  "ARB_RPC_HTTP",
-  "https://arb1.arbitrum.io/rpc"
+  "POLYGON_RPC_HTTP",
+  optionalEnv("ARB_RPC_HTTP", "https://polygon-rpc.com")
 );
 export const RPC_HTTP_FALLBACK = optionalEnv(
-  "ARB_RPC_HTTP_FALLBACK",
-  "https://arbitrum-one.publicnode.com"
+  "POLYGON_RPC_HTTP_FALLBACK",
+  optionalEnv("ARB_RPC_HTTP_FALLBACK", "https://polygon-bor-rpc.publicnode.com")
 );
-export const RPC_WS = process.env["ARB_RPC_WS"];
+export const RPC_WS = process.env["POLYGON_RPC_WS"] ?? process.env["ARB_RPC_WS"];
+export const RPC_WS_FALLBACK = process.env["POLYGON_RPC_WS_FALLBACK"];
+
+export const RPC_HTTP_CANDIDATES = csvEnv("POLYGON_RPC_HTTP_CANDIDATES", [
+  "https://polygon-bor-rpc.publicnode.com",
+  "https://polygon-rpc.com",
+  "https://rpc.ankr.com/polygon",
+  "https://polygon.llamarpc.com",
+  RPC_HTTP,
+  RPC_HTTP_FALLBACK,
+]).filter((v, i, arr) => v.length > 0 && arr.indexOf(v) === i);
+
+export const RPC_WS_CANDIDATES = csvEnv("POLYGON_RPC_WS_CANDIDATES", [
+  "wss://polygon-bor-rpc.publicnode.com",
+  "wss://polygon-heimdall-rpc.publicnode.com:443/websocket",
+  RPC_WS ?? "",
+  RPC_WS_FALLBACK ?? "",
+]).filter((v, i, arr) => v.length > 0 && arr.indexOf(v) === i);
 
 // ─── Wallet ──────────────────────────────────────────────────────────────────
 export function getWallet(provider: ethers.Provider): ethers.Wallet {
@@ -54,38 +80,38 @@ export const AAVE_POOL = optionalEnv(
   "0x794a61358D6845594F94dc1DB02A252b5b4814aD"
 );
 
-// ─── Known Tokens (Arbitrum One) ─────────────────────────────────────────────
+// ─── Known Tokens (Polygon PoS) ─────────────────────────────────────────────
 export const TOKENS: Record<string, { address: string; decimals: number; symbol: string }> =
   {
+    WMATIC: {
+      address: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
+      decimals: 18,
+      symbol: "WMATIC",
+    },
     WETH: {
-      address: "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",
+      address: "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619",
       decimals: 18,
       symbol: "WETH",
     },
     USDC: {
-      address: "0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8",
+      address: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
       decimals: 6,
       symbol: "USDC",
     },
     USDT: {
-      address: "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9",
+      address: "0xc2132D05D31c914a87C6611C10748AaCbA58e8F",
       decimals: 6,
       symbol: "USDT",
     },
     DAI: {
-      address: "0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1",
+      address: "0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063",
       decimals: 18,
       symbol: "DAI",
     },
     WBTC: {
-      address: "0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f",
+      address: "0x1BFD67037B42Cf73acF2047067bd4F2C47D9BfD6",
       decimals: 8,
       symbol: "WBTC",
-    },
-    ARB: {
-      address: "0x912CE59144191C1204E64559FE8253a0e49E6548",
-      decimals: 18,
-      symbol: "ARB",
     },
   };
 
@@ -109,17 +135,8 @@ export const DEXES: DexConfig[] = [
     type: "UniV3",
     factory: "0x1F98431c8aD98523631AE4a59f267346ea31F984",
     quoter: "0x61fFE014bA17989E743c5F6cB21bF9697530B21e", // QuoterV2
-    router: "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45",
+    router: "0xE592427A0AEce92De3Edee1F18E0157C05861564",
     feeTiers: [100, 500, 3000, 10000],
-  },
-  // Camelot V3 (Algebra-based, single dynamic fee pool)
-  {
-    name: "CamelotV3",
-    type: "UniV3",
-    factory: "0x1a3c9B1d2F0529D97f2afC5136Cc23e58f1FD35b",
-    quoter: "0xa6EF4d6a2E48E2dD2e23f2BB72F53e15B12E22D6",
-    router: "0x1F721E2E82F6676FCE4eA07A5958cF098D339e18",
-    feeTiers: [0], // dynamic fee — placeholder
   },
   // SushiSwap V2
   {
@@ -129,12 +146,12 @@ export const DEXES: DexConfig[] = [
     router: "0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506",
     defaultFee: 3000,
   },
-  // Camelot V2
+  // QuickSwap V2
   {
-    name: "CamelotV2",
+    name: "QuickSwapV2",
     type: "UniV2",
-    factory: "0x6EcCab422D763aC031210895C81787E87B43A652",
-    router: "0xc873fEcbd354f5A56E00E710B90EF4201db2448d",
+    factory: "0x5757371414417b8c6caad45baef941abc7d3ab32",
+    router: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
     defaultFee: 3000,
   },
   // Balancer V2
@@ -148,11 +165,13 @@ export const DEXES: DexConfig[] = [
 
 // Pairs to monitor (base token → quote tokens)
 export const SCAN_PAIRS: Array<[string, string]> = [
+  ["WMATIC", "USDC"],
+  ["WMATIC", "USDT"],
+  ["WMATIC", "WETH"],
   ["WETH", "USDC"],
   ["WETH", "USDT"],
   ["WETH", "DAI"],
   ["WBTC", "WETH"],
   ["USDC", "USDT"],
-  ["ARB", "WETH"],
-  ["ARB", "USDC"],
+  ["WBTC", "USDC"],
 ];

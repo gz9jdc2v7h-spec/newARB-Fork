@@ -30,7 +30,7 @@ import { PairQuotes } from "../discovery/OpportunityScanner";
 import { logger } from "../utils/logger";
 
 export interface ArbPath {
-  /** Ordered token symbols forming the cycle, e.g. ["WETH","USDC","ARB","WETH"] */
+  /** Ordered token symbols forming the cycle, e.g. ["WETH","USDC","WMATIC","WETH"] */
   tokens: string[];
   /** DEX used for each hop */
   dexes: string[];
