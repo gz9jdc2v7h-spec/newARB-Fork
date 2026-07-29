@@ -50,19 +50,35 @@ export interface HealthRuntimeEvent extends RuntimeEventBase {
   detail: string;
 }
 
+export interface ExecutionStatusRuntimeEvent extends RuntimeEventBase {
+  kind: "execution_status";
+  opportunityId: string;
+  mode: string;
+  status:
+    | "submitted"
+    | "replaced"
+    | "cancelled"
+    | "expired"
+    | "confirmed"
+    | "reverted";
+  detail?: string;
+}
+
 export type RuntimeEventKind =
   | "block"
   | "pending_tx"
   | "pool_update"
   | "receipt"
-  | "health";
+  | "health"
+  | "execution_status";
 
 export type RuntimeEvent =
   | BlockRuntimeEvent
   | PendingTxRuntimeEvent
   | PoolUpdateRuntimeEvent
   | ReceiptRuntimeEvent
-  | HealthRuntimeEvent;
+  | HealthRuntimeEvent
+  | ExecutionStatusRuntimeEvent;
 
 export class RuntimeEventStream {
   private readonly emitter = new EventEmitter();
@@ -70,6 +86,14 @@ export class RuntimeEventStream {
   private readonly maxHistory: number;
   private pendingSeenThisBlock = 0;
   private lastBlockNumber: number | null = null;
+  private executionStatusCounters: Record<ExecutionStatusRuntimeEvent["status"], number> = {
+    submitted: 0,
+    replaced: 0,
+    cancelled: 0,
+    expired: 0,
+    confirmed: 0,
+    reverted: 0,
+  };
 
   constructor(maxHistory = MARKET_EVENT_BUFFER_SIZE) {
     this.maxHistory = Math.max(32, maxHistory);
@@ -157,6 +181,21 @@ export class RuntimeEventStream {
       status,
       detail,
     });
+  }
+
+  publishExecutionStatus(
+    statusEvent: Omit<ExecutionStatusRuntimeEvent, "kind" | "observedAtMs">
+  ): void {
+    this.executionStatusCounters[statusEvent.status] += 1;
+    this.publish({
+      kind: "execution_status",
+      observedAtMs: Date.now(),
+      ...statusEvent,
+    });
+  }
+
+  executionStatusSnapshot(): Record<ExecutionStatusRuntimeEvent["status"], number> {
+    return { ...this.executionStatusCounters };
   }
 
   snapshot(): RuntimeEvent[] {

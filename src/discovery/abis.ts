@@ -119,3 +119,16 @@ export const AAVE_POOL_ABI = [
     type: "function",
   },
 ] as const;
+
+export const BALANCER_VAULT_ABI = [
+  "function getPoolTokens(bytes32 poolId) view returns (address[] tokens, uint256[] balances, uint256 lastChangeBlock)",
+  "function queryBatchSwap(uint8 kind, tuple(bytes32 poolId,uint256 assetInIndex,uint256 assetOutIndex,uint256 amount,bytes userData)[] swaps, address[] assets, tuple(address sender,bool fromInternalBalance,address recipient,bool toInternalBalance) funds) returns (int256[] assetDeltas)",
+  "function swap(tuple(bytes32 poolId,uint8 kind,address assetIn,address assetOut,uint256 amount,bytes userData) singleSwap, tuple(address sender,bool fromInternalBalance,address recipient,bool toInternalBalance) funds, uint256 limit, uint256 deadline) payable returns (uint256 amountCalculated)",
+] as const;
+
+export const CURVE_POOL_ABI = [
+  "function get_dy(uint256 i, uint256 j, uint256 dx) view returns (uint256)",
+  "function get_dy(int128 i, int128 j, uint256 dx) view returns (uint256)",
+  "function exchange(uint256 i, uint256 j, uint256 dx, uint256 min_dy) returns (uint256)",
+  "function exchange(int128 i, int128 j, uint256 dx, uint256 min_dy) returns (uint256)",
+] as const;

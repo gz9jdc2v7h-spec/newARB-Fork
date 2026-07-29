@@ -16,6 +16,10 @@ import { findArbitragePaths, cycleKey, ArbPath } from "../math/BellmanFord";
 import { kellyScore } from "../math/KellyCriterion";
 import { EmaTracker, classifyRegime } from "../math/EmaTracker";
 import { selectOptimalPortfolio, PortfolioSelection } from "../math/QuantumSelector";
+import {
+  buildExecutableMultiHopRoutes,
+  ExecutableMultiHopRoute,
+} from "../routing/MultiHopRouter";
 
 // Preserve at least 10% of the raw Kelly score so shallow pools are penalized
 // without collapsing otherwise-profitable opportunities to zero.
@@ -63,6 +67,8 @@ export interface ArbitrageOpportunity {
   invariantFamilies: string[];
   /** Route shape for downstream execution policy. */
   routeKind: "two_leg" | "multi_hop";
+  /** Fully constructed route if multi-hop execution is available. */
+  multiHopRoute?: ExecutableMultiHopRoute;
 }
 
 // ─── Token price oracle (derived from snapshot) ───────────────────────────────
@@ -305,11 +311,31 @@ export class OpportunityRanker {
     // Run Bellman–Ford to find multi-hop cycles (informs scoring bonus)
     const arbPaths = findArbitragePaths(snapshot);
     const multiHopKeys = new Set(arbPaths.map((p) => cycleKey(p.tokens)));
+    const executableRoutes = buildExecutableMultiHopRoutes(
+      snapshot,
+      arbPaths,
+      ethers.parseEther("1")
+    );
+    const routesByCycleKey = new Map<string, ExecutableMultiHopRoute[]>();
+    for (const route of executableRoutes) {
+      if (!route.valid) continue;
+      const key = cycleKey(route.tokens);
+      const arr = routesByCycleKey.get(key) ?? [];
+      arr.push(route);
+      routesByCycleKey.set(key, arr);
+    }
 
     // Enumerate two-pool opportunities across all pairs in parallel
     const oppArrays = await Promise.all(
       snapshot.map((pairData) =>
-        this.findOpportunities(pairData, gasData, ethUsd, multiHopKeys, tokenPrices)
+        this.findOpportunities(
+          pairData,
+          gasData,
+          ethUsd,
+          multiHopKeys,
+          tokenPrices,
+          routesByCycleKey
+        )
       )
     );
     const opportunities = oppArrays.flat();
@@ -365,7 +391,8 @@ export class OpportunityRanker {
     gasData: GasData,
     ethUsd: number,
     multiHopKeys: Set<string>,
-    tokenPrices: Map<string, number>
+    tokenPrices: Map<string, number>,
+    routesByCycleKey: Map<string, ExecutableMultiHopRoute[]>
   ): Promise<ArbitrageOpportunity[]> {
     const { tokenIn, tokenOut, quotes } = pairData;
     if (quotes.length < 2) return [];
@@ -475,7 +502,11 @@ export class OpportunityRanker {
 
         // ── Multi-hop bonus: confirmed Bellman–Ford cycle → +15 % score ───
         const pairKey = cycleKey([tokenIn, tokenOut]);
-        const isMultiHop = multiHopKeys.has(pairKey);
+        const selectedRoute = Array.from(routesByCycleKey.entries())
+          .filter(([k]) => k.includes(tokenIn) && k.includes(tokenOut))
+          .flatMap(([, routes]) => routes)
+          .find((route) => route.valid);
+        const isMultiHop = Boolean(selectedRoute) || multiHopKeys.has(pairKey);
         const score = isMultiHop ? depthAdjustedScore * 1.15 : depthAdjustedScore;
         const quoteAgeMs = Date.now() - Math.min(buyQuote.timestamp, sellQuote.timestamp);
 
@@ -501,7 +532,8 @@ export class OpportunityRanker {
           invariantFamilies: Array.from(
             new Set([buyQuote.invariantFamily, sellQuote.invariantFamily])
           ),
-          routeKind: isMultiHop ? "multi_hop" : "two_leg",
+          routeKind: selectedRoute ? "multi_hop" : "two_leg",
+          multiHopRoute: selectedRoute,
         });
       }
     }

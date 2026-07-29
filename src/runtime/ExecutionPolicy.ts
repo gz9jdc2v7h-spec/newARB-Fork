@@ -1,4 +1,5 @@
 import {
+  ENABLE_MULTI_HOP_EXECUTION,
   ENABLE_ATOMIC_FLASH,
   ENABLE_PRIVATE_RELAY,
   QUOTE_MAX_AGE_MS,
@@ -13,6 +14,7 @@ export type ExecutionMode =
 export interface ExecutionIntent {
   hasPrivateKey: boolean;
   routeKind: "two_leg" | "multi_hop";
+  hasExecutableMultiHopRoute?: boolean;
   requiresFlashLoan: boolean;
   quoteAgeMs: number;
   supportsPrivateRelay: boolean;
@@ -46,6 +48,9 @@ export function decideExecutionMode(intent: ExecutionIntent): ExecutionDecision 
 
   if (intent.routeKind === "multi_hop") {
     riskFlags.push("multi_hop_route");
+    if (!intent.hasExecutableMultiHopRoute || !ENABLE_MULTI_HOP_EXECUTION) {
+      riskFlags.push("multi_hop_not_executable");
+    }
   }
 
   if (

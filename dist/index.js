@@ -11,6 +11,8 @@ const helpers_1 = require("./utils/helpers");
 const RuntimeEventStream_1 = require("./runtime/RuntimeEventStream");
 const RiskControls_1 = require("./runtime/RiskControls");
 const ExecutionPolicy_1 = require("./runtime/ExecutionPolicy");
+const AtomicFlashExecutor_1 = require("./runtime/AtomicFlashExecutor");
+const ObservabilityReporter_1 = require("./runtime/ObservabilityReporter");
 // ─── Provider setup ───────────────────────────────────────────────────────────
 async function createHttpProvider() {
     let lastErr;
@@ -52,6 +54,7 @@ async function main() {
     const httpProvider = await createHttpProvider();
     const wsProvider = await createWsProvider();
     const eventStream = new RuntimeEventStream_1.RuntimeEventStream();
+    const observability = new ObservabilityReporter_1.ObservabilityReporter(eventStream);
     eventStream.on((event) => {
         if (event.kind === "health" && event.status !== "ok") {
             logger_1.logger.warn("Runtime event", event);
@@ -60,6 +63,21 @@ async function main() {
             logger_1.logger.debug("Runtime event", event);
         }
     });
+    observability.logConfig({
+        configVersion: 1,
+        configHash: "runtime-config",
+        mode: process.env["PRIVATE_KEY"] ? "live" : "dry_run",
+        minNetProfitUsd: process.env["MIN_PROFIT_USD"] ?? "0",
+        minProfitToGasRatio: "0",
+        maxPoolUsageRatio: "1",
+        privateRelayFirst: Boolean(config_1.PRIVATE_RELAY_ENDPOINT),
+        publicFallback: config_1.PUBLIC_FALLBACK,
+        killSwitch: false,
+        c2Enabled: false,
+        enabledVenues: ["UniswapV3", "SushiSwapV2", "QuickSwapV2", "BalancerV2", "Curve"],
+        enabledAssets: ["WMATIC", "WETH", "USDC", "USDT", "DAI", "WBTC"],
+        gasCap: "0",
+    }, "runtime");
     // Verify network
     const network = await httpProvider.getNetwork();
     if (network.chainId !== BigInt(config_1.CHAIN_ID)) {
@@ -76,6 +94,9 @@ async function main() {
     else {
         logger_1.logger.warn("PRIVATE_KEY not set — running in DRY-RUN mode (discovery + ranking only)");
     }
+    const atomicFlashExecutor = config_1.ENABLE_ATOMIC_FLASH && config_1.FLASH_EXECUTOR_ADDRESS
+        ? new AtomicFlashExecutor_1.AtomicFlashExecutor(eventStream)
+        : null;
     // Debounce: ensure we don't process overlapping snapshots
     let processing = false;
     const handleSnapshot = async (snapshot) => {
@@ -91,6 +112,7 @@ async function main() {
                 return;
             }
             const best = opportunities[0];
+            observability.recordDiscovery(best);
             logger_1.logger.info("Best opportunity", {
                 label: best.label,
                 grossUsd: best.grossProfitUsd.toFixed(2),
@@ -100,22 +122,32 @@ async function main() {
                 invariantFamilies: best.invariantFamilies,
                 sizingMethod: best.sizingMethod,
                 quoteAgeMs: best.quoteAgeMs,
+                routeKind: best.routeKind,
             });
             if (executor) {
                 const risk = (0, RiskControls_1.assessOpportunityRisk)(best);
                 const decision = (0, ExecutionPolicy_1.decideExecutionMode)({
                     hasPrivateKey: Boolean(process.env["PRIVATE_KEY"]),
                     routeKind: best.routeKind,
+                    hasExecutableMultiHopRoute: Boolean(best.multiHopRoute?.valid),
                     requiresFlashLoan: best.routeKind === "multi_hop",
                     quoteAgeMs: best.quoteAgeMs,
-                    supportsPrivateRelay: true,
-                    supportsAtomicFlash: false,
+                    supportsPrivateRelay: Boolean(config_1.PRIVATE_RELAY_ENDPOINT),
+                    supportsAtomicFlash: Boolean(atomicFlashExecutor),
                     expectedNetProfitUsd: best.netProfitUsd,
                     riskFlags: risk.flags,
                 });
+                observability.recordDecision(best.label, decision);
                 logger_1.logger.info("Execution decision", decision);
                 if (decision.shouldExecute && decision.mode === "sequential_live") {
                     await executor.execute(best);
+                }
+                else if (decision.shouldExecute && decision.mode === "private_relay_live") {
+                    await executor.execute(best);
+                }
+                else if (decision.shouldExecute && decision.mode === "atomic_flash" && atomicFlashExecutor) {
+                    const currentBlock = await httpProvider.getBlockNumber();
+                    await atomicFlashExecutor.execute(best, currentBlock);
                 }
                 else if (!decision.shouldExecute) {
                     eventStream.publishHealth("risk", "paused", `Execution paused: ${decision.rationale} (${decision.riskFlags.join(",") || "no-flags"})`, "risk");
@@ -124,6 +156,7 @@ async function main() {
         }
         finally {
             processing = false;
+            observability.publishHealth();
         }
     };
     const scanner = new OpportunityScanner_1.OpportunityScanner(httpProvider, wsProvider, handleSnapshot, eventStream);
@@ -139,9 +172,6 @@ async function main() {
     };
     process.on("SIGINT", shutdown);
     process.on("SIGTERM", shutdown);
-    // In dry-run mode without WebSocket, the polling loop in OpportunityScanner
-    // keeps the process alive. With WebSocket subscriptions the event listener
-    // keeps the process alive. Either way we block here.
     while (true) {
         await (0, helpers_1.sleep)(60_000);
         logger_1.logger.debug("Heartbeat — bot is running");
