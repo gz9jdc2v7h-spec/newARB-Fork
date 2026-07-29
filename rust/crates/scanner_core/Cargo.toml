@@ -1,0 +1,13 @@
+[package]
+name        = "scanner_core"
+description = "Core domain types and output schema for the Apex-Omega Chain-137 scanner"
+version.workspace    = true
+edition.workspace    = true
+authors.workspace    = true
+license.workspace    = true
+
+[dependencies]
+adapters  = { path = "../adapters" }
+rust_math = { path = "../rust_math" }
+serde     = { workspace = true }
+serde_json = { workspace = true }

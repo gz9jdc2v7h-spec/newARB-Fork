@@ -1,39 +1,25 @@
 {
-  "name": "apex-tx-submitter",
+  "name": "newARB-Fork",
   "version": "1.0.0",
-  "description": "Controlled transaction gateway for APEX-OMEGA arbitrage engine",
+  "description": "Optimized live mainnet arbitrage bot — Discovery, Ranking & Execution on Arbitrum",
   "main": "dist/index.js",
-  "types": "dist/index.d.ts",
-  "exports": {
-    ".": {
-      "import": "./dist/index.js",
-      "require": "./dist/index.js",
-      "types": "./dist/index.d.ts"
-    }
-  },
   "scripts": {
     "build": "tsc",
-    "build:watch": "tsc --watch",
-    "typecheck": "tsc --noEmit",
-    "test": "echo \"No test runner configured — add jest or vitest\" && exit 0"
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts",
+    "lint": "eslint 'src/**/*.ts'",
+    "typecheck": "tsc --noEmit"
   },
-  "repository": {
-    "type": "git",
-    "url": "http://localhost:26831/gz9jdc2v7h-spec/newARB-Fork.git"
-  },
-  "keywords": ["arbitrage", "ethereum", "ethers", "web3", "flashloan", "mev", "apex"],
-  "author": "",
-  "license": "ISC",
-  "type": "module",
   "dependencies": {
-    "ethers": "^6.17.0"
-  },
-  "optionalDependencies": {
-    "web3": "^4.16.0"
+    "dotenv": "^16.4.5",
+    "ethers": "^6.13.4"
   },
   "devDependencies": {
-    "@types/node": "^26.1.2",
-    "ts-node": "^10.9.2",
-    "typescript": "^5.9.3"
+    "@types/node": "^22.5.5",
+    "typescript": "^5.5.4",
+    "ts-node": "^10.9.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }

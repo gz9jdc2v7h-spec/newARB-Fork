@@ -1,0 +1,20 @@
+[package]
+name        = "scanner_pyo3"
+description = "PyO3 Python bindings for the Apex-Omega Rust scanner"
+version.workspace    = true
+edition.workspace    = true
+authors.workspace    = true
+license.workspace    = true
+
+[lib]
+name   = "scanner_pyo3"
+crate-type = ["cdylib"]
+
+[dependencies]
+scanner_core = { path = "../scanner_core" }
+ranking      = { path = "../ranking" }
+validator    = { path = "../validator" }
+rust_math    = { path = "../rust_math" }
+adapters     = { path = "../adapters" }
+serde_json   = { workspace = true }
+pyo3         = { workspace = true }

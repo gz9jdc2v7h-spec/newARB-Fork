@@ -1,0 +1,11 @@
+[package]
+name        = "adapters"
+description = "DEX invariant adapters: UniswapV3 and QuickSwap Algebra (separate models)"
+version.workspace    = true
+edition.workspace    = true
+authors.workspace    = true
+license.workspace    = true
+
+[dependencies]
+rust_math = { path = "../rust_math" }
+serde     = { workspace = true }
