@@ -55,6 +55,14 @@ export interface ArbitrageOpportunity {
   priceImpactSell: number;
   /** True if this opportunity is part of a detected Bellman–Ford cycle. */
   isMultiHop: boolean;
+  /** Oldest quote age across both legs. */
+  quoteAgeMs: number;
+  /** How the trade size was derived. */
+  sizingMethod: "cfmm_closed_form" | "spread_scaled";
+  /** Invariant families used by the route. */
+  invariantFamilies: string[];
+  /** Route shape for downstream execution policy. */
+  routeKind: "two_leg" | "multi_hop";
 }
 
 // ─── Token price oracle (derived from snapshot) ───────────────────────────────
@@ -140,7 +148,13 @@ function buildTokenPricesUsd(snapshot: PairQuotes[], ethUsd: number): Map<string
  *   Pool 2: r2 = buyQuote.reserveOut  (tokenOut reserve of low-price pool)
  *           s2 = buyQuote.reserveIn   (tokenIn  reserve of low-price pool)
  */
-function computeOptimalInput(buyQuote: PriceQuote, sellQuote: PriceQuote): bigint {
+function computeOptimalInput(
+  buyQuote: PriceQuote,
+  sellQuote: PriceQuote
+): {
+  amountIn: bigint;
+  sizingMethod: "cfmm_closed_form" | "spread_scaled";
+} {
   const hasBuyReserves =
     buyQuote.reserveIn !== undefined &&
     buyQuote.reserveOut !== undefined &&
@@ -175,17 +189,22 @@ function computeOptimalInput(buyQuote: PriceQuote, sellQuote: PriceQuote): bigin
         buyQuote.reserveIn!,
         buyQuote.feeBps!
       );
-      if (profit > 0n) return x;
+      if (profit > 0n) {
+        return { amountIn: x, sizingMethod: "cfmm_closed_form" };
+      }
     }
   }
 
   // Fallback: spread-proportional fraction of quoted amount.
   const spread = (sellQuote.price - buyQuote.price) / buyQuote.price;
-  if (spread <= 0) return 0n;
+  if (spread <= 0) return { amountIn: 0n, sizingMethod: "spread_scaled" };
 
   // Conservative cap: 60 % of quoted amount, scaled by spread magnitude
   const factor = Math.min(0.6 + spread * 4, 1.0);
-  return BigInt(Math.floor(Number(sellQuote.amountIn) * factor));
+  return {
+    amountIn: BigInt(Math.floor(Number(sellQuote.amountIn) * factor)),
+    sizingMethod: "spread_scaled",
+  };
 }
 
 // ─── Exact two-leg profit from real on-chain data ────────────────────────────
@@ -376,7 +395,10 @@ export class OpportunityRanker {
         if (regime === "extreme" && spread < MAX_SLIPPAGE * 4) continue;
 
         // ── Closed-form or spread-proportional optimal trade size ──────────
-        const tradeAmountIn = computeOptimalInput(buyQuote, sellQuote);
+        const { amountIn: tradeAmountIn, sizingMethod } = computeOptimalInput(
+          buyQuote,
+          sellQuote
+        );
         if (tradeAmountIn === 0n) continue;
 
         const tokenInCfg = TOKENS[tokenIn];
@@ -455,6 +477,7 @@ export class OpportunityRanker {
         const pairKey = cycleKey([tokenIn, tokenOut]);
         const isMultiHop = multiHopKeys.has(pairKey);
         const score = isMultiHop ? depthAdjustedScore * 1.15 : depthAdjustedScore;
+        const quoteAgeMs = Date.now() - Math.min(buyQuote.timestamp, sellQuote.timestamp);
 
         const label = `${tokenIn}→${tokenOut} [${buyQuote.dex}↔${sellQuote.dex}]${isMultiHop ? " 🔄" : ""}`;
 
@@ -473,6 +496,12 @@ export class OpportunityRanker {
           priceImpactBuy,
           priceImpactSell,
           isMultiHop,
+          quoteAgeMs,
+          sizingMethod,
+          invariantFamilies: Array.from(
+            new Set([buyQuote.invariantFamily, sellQuote.invariantFamily])
+          ),
+          routeKind: isMultiHop ? "multi_hop" : "two_leg",
         });
       }
     }

@@ -5,6 +5,8 @@ import { UNIV2_FACTORY_ABI, UNIV2_PAIR_ABI, UNIV3_QUOTER_V2_ABI } from "./abis";
 
 export interface PriceQuote {
   dex: string;
+  invariantFamily: "ConstantProduct" | "ConcentratedLiquidity" | "Weighted";
+  quoteSource: "reserves" | "quoter";
   tokenIn: string;
   tokenOut: string;
   amountIn: bigint;
@@ -76,6 +78,8 @@ async function quoteUniV2(
 
   return {
     dex: dex.name,
+    invariantFamily: "ConstantProduct",
+    quoteSource: "reserves",
     tokenIn: tokenInSym,
     tokenOut: tokenOutSym,
     amountIn,
@@ -127,6 +131,8 @@ async function quoteUniV3(
       if (!best || amountOut > best.amountOut) {
         best = {
           dex: dex.name,
+          invariantFamily: "ConcentratedLiquidity",
+          quoteSource: "quoter",
           tokenIn: tokenInSym,
           tokenOut: tokenOutSym,
           amountIn,

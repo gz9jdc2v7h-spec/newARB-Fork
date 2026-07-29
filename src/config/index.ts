@@ -73,6 +73,21 @@ export const POLL_INTERVAL_MS = parseInt(
   10
 );
 export const LOG_LEVEL = optionalEnv("LOG_LEVEL", "info");
+export const ENABLE_PENDING_FEED = optionalEnv("ENABLE_PENDING_FEED", "true") === "true";
+export const MARKET_EVENT_BUFFER_SIZE = parseInt(
+  optionalEnv("MARKET_EVENT_BUFFER_SIZE", "512"),
+  10
+);
+export const QUOTE_MAX_AGE_MS = parseInt(
+  optionalEnv("QUOTE_MAX_AGE_MS", "4000"),
+  10
+);
+export const ENABLE_ATOMIC_FLASH = optionalEnv("ENABLE_ATOMIC_FLASH", "false") === "true";
+export const ENABLE_PRIVATE_RELAY = optionalEnv("ENABLE_PRIVATE_RELAY", "false") === "true";
+export const MAX_PENDING_TX_PER_BLOCK = parseInt(
+  optionalEnv("MAX_PENDING_TX_PER_BLOCK", "128"),
+  10
+);
 
 // ─── Flash Loan ──────────────────────────────────────────────────────────────
 export const AAVE_POOL = optionalEnv(

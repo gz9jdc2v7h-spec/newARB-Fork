@@ -9,6 +9,7 @@ import {
   UNIV3_ROUTER_ABI,
   ERC20_ABI,
 } from "../discovery/abis";
+import { RuntimeEventStream } from "../runtime/RuntimeEventStream";
 
 // ─── ERC-20 approval helper ───────────────────────────────────────────────────
 
@@ -144,10 +145,12 @@ function recordFailure(): void {
 export class Executor {
   private provider: ethers.Provider;
   private wallet: ethers.Wallet;
+  private readonly eventStream?: RuntimeEventStream;
 
-  constructor(provider: ethers.Provider) {
+  constructor(provider: ethers.Provider, eventStream?: RuntimeEventStream) {
     this.provider = provider;
     this.wallet = getWallet(provider);
+    this.eventStream = eventStream;
   }
 
   /**
@@ -211,6 +214,18 @@ export class Executor {
       }
 
       logger.info("Leg 1 confirmed", { hash: receipt1.hash, gas: receipt1.gasUsed.toString() });
+      this.eventStream?.publishReceipt({
+        txHash: receipt1.hash,
+        receiptStatus: receipt1.status === 1,
+        confirmedBlock: receipt1.blockNumber,
+        gasUsed: receipt1.gasUsed.toString(),
+        rawReceipt: {},
+        effectiveGasPrice: receipt1.gasPrice?.toString() ?? "0",
+        gasCostWei: ((receipt1.gasPrice ?? 0n) * receipt1.gasUsed).toString(),
+        from: receipt1.from,
+        to: receipt1.to ?? "",
+        logs: [],
+      }, "executor");
 
       // ── Leg 2: buy tokenIn back on the lower-price DEX (buyQuote) ──────────
       // Buying back where tokenIn costs LESS maximises the round-trip profit.
@@ -253,6 +268,18 @@ export class Executor {
       }
 
       logger.info("Leg 2 confirmed", { hash: receipt2.hash, gas: receipt2.gasUsed.toString() });
+      this.eventStream?.publishReceipt({
+        txHash: receipt2.hash,
+        receiptStatus: receipt2.status === 1,
+        confirmedBlock: receipt2.blockNumber,
+        gasUsed: receipt2.gasUsed.toString(),
+        rawReceipt: {},
+        effectiveGasPrice: receipt2.gasPrice?.toString() ?? "0",
+        gasCostWei: ((receipt2.gasPrice ?? 0n) * receipt2.gasUsed).toString(),
+        from: receipt2.from,
+        to: receipt2.to ?? "",
+        logs: [],
+      }, "executor");
 
       recordSuccess();
       return true;

@@ -18,6 +18,7 @@ export type SubmissionStatus =
 export type ReceiptStatus = 'PENDING' | 'CONFIRMED' | 'REVERTED' | 'EXPIRED';
 export type SettlementStatus = 'SETTLED' | 'FAILED' | 'PENDING' | 'REVERTED';
 export type MachineMode = 'dry_run' | 'sim_only' | 'live';
+export type ExecutionMode = 'dry_run' | 'sequential_live' | 'private_relay_live' | 'atomic_flash';
 
 // ─── Request types ────────────────────────────────────────────────────────────
 
@@ -262,6 +263,8 @@ export interface ProfitRecord {
   simulatedNetUsd?: string;
   submittedNetUsd?: string;
   realizedNetUsd?: string;
+  sizingMethod?: string;
+  invariantFamilies?: string[];
 }
 
 export interface SimulationRecord {
@@ -303,6 +306,20 @@ export interface SettlementRecord {
   settlementStatus: SettlementStatus;
 }
 
+export interface MarketContextRecord {
+  observedEventCount: number;
+  latestBlockNumber?: number;
+  pendingTxCount?: number;
+  quoteAgeMs?: number;
+}
+
+export interface ExecutionDecisionRecord {
+  mode: ExecutionMode;
+  shouldExecute: boolean;
+  rationale: string;
+  riskFlags: string[];
+}
+
 /** Complete evidence chain for one opportunity. */
 export interface OpportunityEvidenceChain {
   opportunityId: string;
@@ -321,11 +338,13 @@ export interface OpportunityEvidenceChain {
   state?: StateRecord;
   route?: RouteRecord;
   profit?: ProfitRecord;
+  marketContext?: MarketContextRecord;
   simulation?: SimulationRecord;
   payload?: PayloadRecord;
   submission?: SubmissionResult;
   settlement?: SettlementRecord;
   rejection?: RejectionRecord;
+  executionDecision?: ExecutionDecisionRecord;
 
   // C1/C2 breakdown
   c1?: {

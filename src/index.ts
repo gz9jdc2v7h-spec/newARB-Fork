@@ -10,6 +10,9 @@ import { OpportunityRanker } from "./ranking/OpportunityRanker";
 import { Executor } from "./execution/Executor";
 import { logger } from "./utils/logger";
 import { sleep } from "./utils/helpers";
+import { RuntimeEventStream } from "./runtime/RuntimeEventStream";
+import { assessOpportunityRisk } from "./runtime/RiskControls";
+import { decideExecutionMode } from "./runtime/ExecutionPolicy";
 
 // ─── Provider setup ───────────────────────────────────────────────────────────
 
@@ -54,6 +57,14 @@ async function main(): Promise<void> {
 
   const httpProvider = await createHttpProvider();
   const wsProvider = await createWsProvider();
+  const eventStream = new RuntimeEventStream();
+  eventStream.on((event) => {
+    if (event.kind === "health" && event.status !== "ok") {
+      logger.warn("Runtime event", event);
+    } else if (event.kind !== "pending_tx") {
+      logger.debug("Runtime event", event);
+    }
+  });
 
   // Verify network
   const network = await httpProvider.getNetwork();
@@ -69,7 +80,7 @@ async function main(): Promise<void> {
   // Only create executor when PRIVATE_KEY is set
   let executor: Executor | null = null;
   if (process.env["PRIVATE_KEY"]) {
-    executor = new Executor(httpProvider);
+    executor = new Executor(httpProvider, eventStream);
     logger.info("Executor initialised — LIVE execution enabled");
   } else {
     logger.warn(
@@ -100,17 +111,41 @@ async function main(): Promise<void> {
         gasUsd: best.gasCostUsd.toFixed(2),
         netUsd: best.netProfitUsd.toFixed(2),
         score: best.score.toFixed(2),
+        invariantFamilies: best.invariantFamilies,
+        sizingMethod: best.sizingMethod,
+        quoteAgeMs: best.quoteAgeMs,
       });
 
       if (executor) {
-        await executor.execute(best);
+        const risk = assessOpportunityRisk(best);
+        const decision = decideExecutionMode({
+          hasPrivateKey: Boolean(process.env["PRIVATE_KEY"]),
+          routeKind: best.routeKind,
+          requiresFlashLoan: best.routeKind === "multi_hop",
+          quoteAgeMs: best.quoteAgeMs,
+          supportsPrivateRelay: true,
+          supportsAtomicFlash: false,
+          expectedNetProfitUsd: best.netProfitUsd,
+          riskFlags: risk.flags,
+        });
+        logger.info("Execution decision", decision);
+        if (decision.shouldExecute && decision.mode === "sequential_live") {
+          await executor.execute(best);
+        } else if (!decision.shouldExecute) {
+          eventStream.publishHealth(
+            "risk",
+            "paused",
+            `Execution paused: ${decision.rationale} (${decision.riskFlags.join(",") || "no-flags"})`,
+            "risk"
+          );
+        }
       }
     } finally {
       processing = false;
     }
   };
 
-  const scanner = new OpportunityScanner(httpProvider, wsProvider, handleSnapshot);
+  const scanner = new OpportunityScanner(httpProvider, wsProvider, handleSnapshot, eventStream);
   scanner.start();
 
   // Keep alive — handle graceful shutdown

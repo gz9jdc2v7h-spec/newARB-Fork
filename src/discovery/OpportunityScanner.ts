@@ -1,8 +1,17 @@
 import { ethers } from "ethers";
-import { DEXES, SCAN_PAIRS, TOKENS, DISCOVERY_WORKERS } from "../config";
+import {
+  DEXES,
+  SCAN_PAIRS,
+  TOKENS,
+  DISCOVERY_WORKERS,
+  ENABLE_PENDING_FEED,
+  MAX_PENDING_TX_PER_BLOCK,
+  POLL_INTERVAL_MS,
+} from "../config";
 import { pLimit } from "../utils/helpers";
 import { logger } from "../utils/logger";
 import { fetchQuote, PriceQuote } from "./PriceFeeder";
+import { RuntimeEventStream } from "../runtime/RuntimeEventStream";
 
 export interface PairQuotes {
   tokenIn: string;
@@ -81,15 +90,19 @@ export class OpportunityScanner {
   private wsProvider: ethers.WebSocketProvider | null = null;
   private onSnapshot: (snapshot: PairQuotes[]) => Promise<void>;
   private running = false;
+  private readonly eventStream?: RuntimeEventStream;
+  private lastPolledBlock: number | null = null;
 
   constructor(
     provider: ethers.Provider,
     wsProvider: ethers.WebSocketProvider | null,
-    onSnapshot: (snapshot: PairQuotes[]) => Promise<void>
+    onSnapshot: (snapshot: PairQuotes[]) => Promise<void>,
+    eventStream?: RuntimeEventStream
   ) {
     this.provider = provider;
     this.wsProvider = wsProvider;
     this.onSnapshot = onSnapshot;
+    this.eventStream = eventStream;
   }
 
   start(): void {
@@ -100,9 +113,11 @@ export class OpportunityScanner {
       if (!this.running) return;
       const snapshot = await scanAllPairs(this.provider).catch((err) => {
         logger.error("Scan error", { err: String(err) });
+        this.eventStream?.publishHealth("http", "degraded", String(err), "scanner");
         return [] as PairQuotes[];
       });
       if (snapshot.length > 0) {
+        this.eventStream?.publishPoolUpdate(snapshot, "scanner");
         await this.onSnapshot(snapshot).catch((err) =>
           logger.error("Snapshot handler error", { err: String(err) })
         );
@@ -112,17 +127,48 @@ export class OpportunityScanner {
     if (this.wsProvider) {
       logger.info("Using WebSocket subscription for block events");
       this.wsProvider.on("block", async (blockNumber: number) => {
+        this.eventStream?.publishBlock(blockNumber, "ws_block");
         logger.debug(`New block: ${blockNumber}`);
         await scanAndEmit();
       });
+      if (ENABLE_PENDING_FEED) {
+        this.wsProvider.on("pending", (txHash: string) => {
+          const accepted =
+            this.eventStream?.publishPendingTx(
+              txHash,
+              "ws_pending",
+              MAX_PENDING_TX_PER_BLOCK
+            ) ?? false;
+          if (!accepted) {
+            logger.debug("Pending tx dropped by backpressure", {
+              txHash,
+              maxPerBlock: MAX_PENDING_TX_PER_BLOCK,
+            });
+          }
+        });
+      }
+      this.eventStream?.publishHealth("ws", "ok", "WebSocket block feed active", "ws_block");
     } else {
       logger.info("WebSocket unavailable — falling back to HTTP polling");
+      this.eventStream?.publishHealth(
+        "ws",
+        "degraded",
+        "WebSocket unavailable, using HTTP polling",
+        "http_poll"
+      );
       const poll = async () => {
         while (this.running) {
+          try {
+            const blockNumber = await this.provider.getBlockNumber();
+            if (this.lastPolledBlock !== blockNumber) {
+              this.lastPolledBlock = blockNumber;
+              this.eventStream?.publishBlock(blockNumber, "http_poll");
+            }
+          } catch (err) {
+            logger.debug("Block poll failed", { err: String(err) });
+          }
           await scanAndEmit();
-          // Poll interval is handled by the block time; no extra sleep needed
-          // unless we want throttling below block time.
-          await new Promise<void>((r) => setTimeout(r, 500));
+          await new Promise<void>((r) => setTimeout(r, POLL_INTERVAL_MS));
         }
       };
       poll();
@@ -133,6 +179,7 @@ export class OpportunityScanner {
     this.running = false;
     if (this.wsProvider) {
       this.wsProvider.removeAllListeners("block");
+      this.wsProvider.removeAllListeners("pending");
     }
   }
 }
