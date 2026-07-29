@@ -1,7 +1,12 @@
 import { ethers } from "ethers";
 import { DexConfig, TOKENS } from "../config";
-import { withRetry, toFloat } from "../utils/helpers";
-import { UNIV2_FACTORY_ABI, UNIV2_PAIR_ABI, UNIV3_QUOTER_V2_ABI } from "./abis";
+import { pLimit, positiveIntEnv, withRetry, toFloat } from "../utils/helpers";
+import {
+  BALANCER_VAULT_ABI,
+  UNIV2_FACTORY_ABI,
+  UNIV2_PAIR_ABI,
+  UNIV3_QUOTER_V2_ABI,
+} from "./abis";
 
 export interface PriceQuote {
   dex: string;
@@ -21,16 +26,129 @@ export interface PriceQuote {
   reserveOut?: bigint;
   /** Pool fee in basis points (e.g. 30 for 0.3 %). */
   feeBps?: number;
+  /** UniV3 fee tier used by the quote (e.g. 500/3000/10000). */
+  poolFee?: number;
+  /** Balancer pool id used by the quote. */
+  poolId?: string;
 }
 
 // How many WETH (18 dec) we price-check by default
 const DEFAULT_AMOUNT_IN_WETH = ethers.parseEther("1");
+const BALANCER_POOL_REGISTERED_TOPIC = ethers.id(
+  "PoolRegistered(bytes32,address,uint8)"
+);
+const BALANCER_SWAP_GAS_ESTIMATE = 170_000n;
+
+const BALANCER_DISCOVERY_FROM_BLOCK = positiveIntEnv(
+  "BALANCER_DISCOVERY_FROM_BLOCK",
+  1
+);
+const BALANCER_DISCOVERY_STEP = positiveIntEnv(
+  "BALANCER_DISCOVERY_STEP",
+  200000
+);
+const BALANCER_DISCOVERY_CONCURRENCY = positiveIntEnv(
+  "BALANCER_DISCOVERY_CONCURRENCY",
+  16
+);
+
+const balancerPairPoolCache = new Map<string, Promise<string[]>>();
+const balancerPoolTokensCache = new Map<string, Promise<string[]>>();
 
 /** Maps symbol → token config */
 function token(symbol: string) {
   const t = TOKENS[symbol];
   if (!t) throw new Error(`Unknown token: ${symbol}`);
   return t;
+}
+
+function canonicalPairKey(tokenA: string, tokenB: string): string {
+  const a = tokenA.toLowerCase();
+  const b = tokenB.toLowerCase();
+  return a < b ? `${a}:${b}` : `${b}:${a}`;
+}
+
+function balancerPairCacheKey(vault: string, tokenA: string, tokenB: string): string {
+  return `${vault.toLowerCase()}:${canonicalPairKey(tokenA, tokenB)}`;
+}
+
+async function getBalancerPoolTokens(
+  provider: ethers.Provider,
+  vault: string,
+  poolId: string
+): Promise<string[]> {
+  const cacheKey = `${vault.toLowerCase()}:${poolId.toLowerCase()}`;
+  const cached = balancerPoolTokensCache.get(cacheKey);
+  if (cached) return cached;
+
+  const task = (async () => {
+    const vaultContract = new ethers.Contract(vault, BALANCER_VAULT_ABI, provider);
+    const [tokens]: [string[], bigint[], bigint] = await withRetry(() =>
+      vaultContract.getPoolTokens(poolId)
+    );
+    return tokens.map((t) => t.toLowerCase());
+  })();
+
+  balancerPoolTokensCache.set(cacheKey, task);
+  return task;
+}
+
+async function discoverBalancerPoolsForPair(
+  provider: ethers.Provider,
+  vault: string,
+  tokenInAddress: string,
+  tokenOutAddress: string
+): Promise<string[]> {
+  const cacheKey = balancerPairCacheKey(vault, tokenInAddress, tokenOutAddress);
+  const cached = balancerPairPoolCache.get(cacheKey);
+  if (cached) return cached;
+
+  const task = (async () => {
+    const latestBlock = await provider.getBlockNumber();
+    const poolIds = new Set<string>();
+
+    for (let fromBlock = BALANCER_DISCOVERY_FROM_BLOCK; fromBlock <= latestBlock; ) {
+      const toBlock = Math.min(fromBlock + BALANCER_DISCOVERY_STEP - 1, latestBlock);
+      const logs = await withRetry(() =>
+        provider.getLogs({
+          address: vault,
+          fromBlock,
+          toBlock,
+          topics: [BALANCER_POOL_REGISTERED_TOPIC],
+        })
+      );
+      for (const log of logs) {
+        const poolId = log.topics[1];
+        if (poolId) poolIds.add(poolId);
+      }
+      fromBlock = toBlock + 1;
+    }
+
+    if (poolIds.size === 0) return [];
+
+    const tokenA = tokenInAddress.toLowerCase();
+    const tokenB = tokenOutAddress.toLowerCase();
+    const poolIdList = Array.from(poolIds);
+    const matches = await pLimit(
+      poolIdList.map(
+        (poolId) =>
+          async (): Promise<string | null> => {
+            try {
+              const tokens = await getBalancerPoolTokens(provider, vault, poolId);
+              return tokens.includes(tokenA) && tokens.includes(tokenB) ? poolId : null;
+            } catch {
+              return null;
+            }
+          }
+      ),
+      BALANCER_DISCOVERY_CONCURRENCY
+    );
+
+    return matches.filter((poolId): poolId is string => poolId !== null);
+  })();
+
+  balancerPairPoolCache.set(cacheKey, task);
+  return task;
 }
 
 // ─── UniV2 quote ─────────────────────────────────────────────────────────────
@@ -134,10 +252,90 @@ async function quoteUniV3(
           price,
           gasEstimate,
           timestamp: Date.now(),
+          poolFee: fee,
         };
       }
     } catch {
       // Pool may not exist for this fee tier — skip
+    }
+  }
+
+  return best;
+}
+
+// ─── Balancer quote ───────────────────────────────────────────────────────────
+
+async function quoteBalancer(
+  provider: ethers.Provider,
+  dex: DexConfig,
+  tokenInSym: string,
+  tokenOutSym: string,
+  amountIn: bigint
+): Promise<PriceQuote | null> {
+  if (!dex.vault) return null;
+
+  const tokenIn = token(tokenInSym);
+  const tokenOut = token(tokenOutSym);
+  const vault = new ethers.Contract(dex.vault, BALANCER_VAULT_ABI, provider);
+  const candidatePools = await discoverBalancerPoolsForPair(
+    provider,
+    dex.vault,
+    tokenIn.address,
+    tokenOut.address
+  );
+  if (candidatePools.length === 0) return null;
+
+  let best: PriceQuote | null = null;
+
+  for (const poolId of candidatePools) {
+    try {
+      const deltas: bigint[] = await withRetry(() =>
+        vault.queryBatchSwap.staticCall(
+          0, // GIVEN_IN
+          [
+            {
+              poolId,
+              assetInIndex: 0n,
+              assetOutIndex: 1n,
+              amount: amountIn,
+              userData: "0x",
+            },
+          ],
+          [tokenIn.address, tokenOut.address],
+          {
+            sender: ethers.ZeroAddress,
+            fromInternalBalance: false,
+            recipient: ethers.ZeroAddress,
+            toInternalBalance: false,
+          }
+        )
+      );
+
+      if (deltas.length < 2) continue;
+      // Balancer queryBatchSwap returns signed vault deltas:
+      // negative delta on assetOut means tokens leave the vault to the trader.
+      const amountOut = -deltas[1];
+      if (amountOut <= 0n) continue;
+
+      const price =
+        toFloat(amountOut, tokenOut.decimals) /
+        toFloat(amountIn, tokenIn.decimals);
+
+      if (!best || amountOut > best.amountOut) {
+        best = {
+          dex: dex.name,
+          tokenIn: tokenInSym,
+          tokenOut: tokenOutSym,
+          amountIn,
+          amountOut,
+          price,
+          gasEstimate: BALANCER_SWAP_GAS_ESTIMATE,
+          timestamp: Date.now(),
+          poolId,
+        };
+      }
+    } catch {
+      // Pool may reject this path/amount — skip
     }
   }
 
@@ -169,6 +367,5 @@ export async function fetchQuote(
   if (dex.type === "UniV3") {
     return quoteUniV3(provider, dex, tokenInSym, tokenOutSym, _amountIn);
   }
-  // Balancer: skip for now (requires on-chain query for poolId)
-  return null;
+  return quoteBalancer(provider, dex, tokenInSym, tokenOutSym, _amountIn);
 }

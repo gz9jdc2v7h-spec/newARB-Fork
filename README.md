@@ -21,8 +21,8 @@ It watches multiple DEXes simultaneously, ranks cross-DEX price discrepancies by
 src/
 ├── config/         – Network config, token list, DEX addresses, env vars
 ├── discovery/
-│   ├── abis.ts             – Minimal ABIs for UniV2, UniV3, Aave
-│   ├── PriceFeeder.ts      – Per-DEX quote fetchers (UniV2 reserve math, UniV3 QuoterV2)
+│   ├── abis.ts             – Minimal ABIs for UniV2, UniV3, Balancer, Aave
+│   ├── PriceFeeder.ts      – Per-DEX quote fetchers (UniV2 reserve math, UniV3 QuoterV2, Balancer Vault)
 │   └── OpportunityScanner.ts – Parallel pair scanner + WebSocket/HTTP-poll event loop
 ├── ranking/
 │   ├── GasEstimator.ts     – EIP-1559 gas data with 1-second cache
@@ -100,6 +100,9 @@ npm start
 | `MAX_SLIPPAGE` | `0.005` | Slippage tolerance (0.5 %) |
 | `DISCOVERY_WORKERS` | `8` | Parallel RPC workers for price scanning |
 | `POLL_INTERVAL_MS` | `500` | HTTP poll interval (ms) when WebSocket unavailable |
+| `BALANCER_DISCOVERY_FROM_BLOCK` | `1` | Start block for Balancer on-chain pool discovery scan |
+| `BALANCER_DISCOVERY_STEP` | `200000` | Block range size per Balancer log query chunk |
+| `BALANCER_DISCOVERY_CONCURRENCY` | `16` | Parallel Balancer pool-token lookups |
 | `LOG_LEVEL` | `info` | Logging verbosity (`debug` / `info` / `warn` / `error`) |
 
 ---
@@ -111,7 +114,7 @@ npm start
 | Uniswap V3 | UniV3 | Fee tiers: 0.01 %, 0.05 %, 0.3 %, 1 % |
 | SushiSwap V2 | UniV2 | 0.3 % fee |
 | QuickSwap V2 | UniV2 | 0.3 % fee |
-| Balancer V2 | Balancer | Vault-based (quote support coming) |
+| Balancer V2 | Balancer | Vault-based (on-chain pool discovery + quote/swap support) |
 
 ---
 

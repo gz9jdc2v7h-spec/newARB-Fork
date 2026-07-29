@@ -97,6 +97,13 @@ export const UNIV3_ROUTER_ABI = [
   },
 ] as const;
 
+export const BALANCER_VAULT_ABI = [
+  "event PoolRegistered(bytes32 indexed poolId, address indexed poolAddress, uint8 specialization)",
+  "function getPoolTokens(bytes32 poolId) view returns (address[] tokens, uint256[] balances, uint256 lastChangeBlock)",
+  "function queryBatchSwap(uint8 kind, tuple(bytes32 poolId,uint256 assetInIndex,uint256 assetOutIndex,uint256 amount,bytes userData)[] swaps, address[] assets, tuple(address sender,bool fromInternalBalance,address recipient,bool toInternalBalance) funds) returns (int256[] assetDeltas)",
+  "function swap(tuple(bytes32 poolId,uint8 kind,address assetIn,address assetOut,uint256 amount,bytes userData) singleSwap, tuple(address sender,bool fromInternalBalance,address recipient,bool toInternalBalance) funds, uint256 limit, uint256 deadline) returns (uint256 amountCalculated)",
+] as const;
+
 export const UNIV2_ROUTER_ABI = [
   "function swapExactTokensForTokens(uint amountIn, uint amountOutMin, address[] calldata path, address to, uint deadline) external returns (uint[] memory amounts)",
   "function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory amounts)",

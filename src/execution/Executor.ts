@@ -5,6 +5,7 @@ import { withRetry, deadline, toFloat } from "../utils/helpers";
 import { logger } from "../utils/logger";
 import { TOKENS, getWallet, MAX_SLIPPAGE, DEXES } from "../config";
 import {
+  BALANCER_VAULT_ABI,
   UNIV2_ROUTER_ABI,
   UNIV3_ROUTER_ABI,
   ERC20_ABI,
@@ -92,6 +93,48 @@ async function executeUniV3Swap(
   logger.info("UniV3 swap submitted", { hash: tx.hash });
   const receipt = await tx.wait(1);
   if (!receipt) throw new Error("No receipt for UniV3 swap");
+  return receipt;
+}
+
+async function executeBalancerSwap(
+  wallet: ethers.Wallet,
+  vaultAddress: string,
+  poolId: string,
+  tokenIn: string,
+  tokenOut: string,
+  amountIn: bigint,
+  amountOutMin: bigint,
+  gasData: Awaited<ReturnType<typeof getGasData>>
+): Promise<ethers.TransactionReceipt> {
+  const vault = new ethers.Contract(vaultAddress, BALANCER_VAULT_ABI, wallet);
+  await ensureApproval(wallet, tokenIn, vaultAddress, amountIn);
+
+  const tx: ethers.TransactionResponse = await vault.swap(
+    {
+      poolId,
+      kind: 0, // GIVEN_IN
+      assetIn: tokenIn,
+      assetOut: tokenOut,
+      amount: amountIn,
+      userData: "0x",
+    },
+    {
+      sender: wallet.address,
+      fromInternalBalance: false,
+      recipient: wallet.address,
+      toInternalBalance: false,
+    },
+    amountOutMin,
+    deadline(),
+    {
+      maxFeePerGas: gasData.maxFeePerGas,
+      maxPriorityFeePerGas: gasData.maxPriorityFee,
+    }
+  );
+
+  logger.info("Balancer swap submitted", { hash: tx.hash, poolId });
+  const receipt = await tx.wait(1);
+  if (!receipt) throw new Error("No receipt for Balancer swap");
   return receipt;
 }
 
@@ -194,8 +237,8 @@ export class Executor {
             gasData
           )
         );
-      } else {
-        const fee = sellDexCfg.feeTiers?.[0] ?? 3000;
+      } else if (sellDexCfg.type === "UniV3") {
+        const fee = sellQuote.poolFee ?? sellDexCfg.feeTiers?.[0] ?? 3000;
         receipt1 = await withRetry(() =>
           executeUniV3Swap(
             this.wallet,
@@ -203,6 +246,32 @@ export class Executor {
             tokenInCfg.address,
             tokenOutCfg.address,
             fee,
+            tradeAmountIn,
+            minOut1,
+            gasData
+          )
+        );
+      } else {
+        if (!sellQuote.poolId || !sellDexCfg.vault) {
+          const missing = [
+            !sellQuote.poolId ? "poolId" : null,
+            !sellDexCfg.vault ? "vault address" : null,
+          ]
+            .filter((v): v is string => v !== null)
+            .join(", ");
+          throw new Error(
+            `Missing Balancer ${missing} for ${sellQuote.dex}`
+          );
+        }
+        const sellVault = sellDexCfg.vault;
+        const sellPoolId = sellQuote.poolId;
+        receipt1 = await withRetry(() =>
+          executeBalancerSwap(
+            this.wallet,
+            sellVault,
+            sellPoolId,
+            tokenInCfg.address,
+            tokenOutCfg.address,
             tradeAmountIn,
             minOut1,
             gasData
@@ -236,8 +305,8 @@ export class Executor {
             gasData
           )
         );
-      } else {
-        const fee = buyDexCfg.feeTiers?.[0] ?? 3000;
+      } else if (buyDexCfg.type === "UniV3") {
+        const fee = buyQuote.poolFee ?? buyDexCfg.feeTiers?.[0] ?? 3000;
         receipt2 = await withRetry(() =>
           executeUniV3Swap(
             this.wallet,
@@ -245,6 +314,32 @@ export class Executor {
             tokenOutCfg.address,
             tokenInCfg.address,
             fee,
+            actualOut1,
+            minOut2,
+            gasData
+          )
+        );
+      } else {
+        if (!buyQuote.poolId || !buyDexCfg.vault) {
+          const missing = [
+            !buyQuote.poolId ? "poolId" : null,
+            !buyDexCfg.vault ? "vault address" : null,
+          ]
+            .filter((v): v is string => v !== null)
+            .join(", ");
+          throw new Error(
+            `Missing Balancer ${missing} for ${buyQuote.dex}`
+          );
+        }
+        const buyVault = buyDexCfg.vault;
+        const buyPoolId = buyQuote.poolId;
+        receipt2 = await withRetry(() =>
+          executeBalancerSwap(
+            this.wallet,
+            buyVault,
+            buyPoolId,
+            tokenOutCfg.address,
+            tokenInCfg.address,
             actualOut1,
             minOut2,
             gasData
