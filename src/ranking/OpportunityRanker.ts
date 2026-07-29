@@ -17,6 +17,10 @@ import { kellyScore } from "../math/KellyCriterion";
 import { EmaTracker, classifyRegime } from "../math/EmaTracker";
 import { selectOptimalPortfolio, PortfolioSelection } from "../math/QuantumSelector";
 
+// Never suppress liquidity depth below 10% of the raw Kelly score so shallow
+// pools are penalized without collapsing otherwise-profitable opportunities.
+const MIN_DEPTH_PENALTY = 0.1;
+
 export interface ArbitrageOpportunity {
   /** Human-readable description */
   label: string;
@@ -433,7 +437,7 @@ export class OpportunityRanker {
             : Number.POSITIVE_INFINITY;
         const depthPenalty =
           Number.isFinite(buyDepthUsd) && buyDepthUsd > 0
-            ? Math.max(0.1, 1 / (1 + capitalUsd / buyDepthUsd))
+            ? Math.max(MIN_DEPTH_PENALTY, 1 / (1 + capitalUsd / buyDepthUsd))
             : 1;
 
         // ── Kelly risk-adjusted score ─────────────────────────────────────

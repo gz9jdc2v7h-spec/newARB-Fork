@@ -27,9 +27,11 @@ const C1_INTERFACE = new ethers_1.Interface([
     'function initAaveFlash(address,uint256,bytes)',
     'function initBalancerFlash(address,uint256,bytes)',
 ]);
+const AAVE_SELECTOR = getRequiredSelector(C1_FUNCTIONS.aave);
+const BALANCER_SELECTOR = getRequiredSelector(C1_FUNCTIONS.balancer);
 exports.C1_SELECTORS = {
-    aave: getRequiredSelector(C1_FUNCTIONS.aave),
-    balancer: getRequiredSelector(C1_FUNCTIONS.balancer),
+    aave: AAVE_SELECTOR,
+    balancer: BALANCER_SELECTOR,
 };
 // ── C1Engine ──────────────────────────────────────────────────────────────────
 class C1Engine {
