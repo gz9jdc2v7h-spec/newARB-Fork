@@ -23,6 +23,7 @@
 import { keccak256, toUtf8Bytes } from 'ethers';
 import type {
   ApexTxRequest,
+  C2Decision,
   ConfigRecord,
   LedgerRecord,
   NormalizedReceipt,
@@ -34,7 +35,7 @@ import type {
 import { EvidenceChain } from '../transparency/EvidenceChain.js';
 import { AuditLogger } from '../transparency/AuditLogger.js';
 
-export type C2Decision = 'MIRROR' | 'REVERSE' | 'NOOP';
+export type { C2Decision };
 
 export interface C2ExecutionRequest {
   opportunityId: string;
