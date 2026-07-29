@@ -111,10 +111,10 @@ export class MempoolFilter {
     const batch = this.pendingBatch.splice(0);
     if (batch.length === 0) return;
 
-    // allSettled ensures one failed fetch doesn't abort the rest of the batch
-    Promise.allSettled(batch.map((h) => this.classifyTx(h))).catch(() => {
-      // allSettled itself never rejects; this guard is defensive
-    });
+    // Fire-and-forget: this runs inside a WebSocket event listener where we
+    // must not block. Individual fetch failures are isolated by allSettled so
+    // an error from one hash never aborts the rest of the batch.
+    void Promise.allSettled(batch.map((h) => this.classifyTx(h)));
   }
 
   private async classifyTx(txHash: string): Promise<void> {

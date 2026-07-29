@@ -140,7 +140,7 @@ export class OpportunityScanner {
         );
         this.wsProvider.on("pending", (txHash: string) => {
           try {
-            this.mempoolFilter!.ingest(txHash);
+            this.mempoolFilter?.ingest(txHash);
           } catch (err) {
             logger.debug("Pending feed error", { txHash, err: String(err) });
           }

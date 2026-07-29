@@ -348,13 +348,20 @@ export class Executor {
       const buyDexCfg = DEXES.find((d) => d.name === buyQuote.dex)!;
       const sellDexCfg = DEXES.find((d) => d.name === sellQuote.dex)!;
 
-      // Router type flag: 0 = UniV2, 1 = UniV3
-      const buyRouterType = buyDexCfg.type === "UniV3" ? 1 : 0;
-      const sellRouterType = sellDexCfg.type === "UniV3" ? 1 : 0;
+      // Router type flag: 0 = UniV2, 1 = UniV3, 2 = Balancer
+      const buyRouterType = buyDexCfg.type === "UniV3" ? 1 : buyDexCfg.type === "Balancer" ? 2 : 0;
+      const sellRouterType = sellDexCfg.type === "UniV3" ? 1 : sellDexCfg.type === "Balancer" ? 2 : 0;
 
-      // Use the first configured fee tier, falling back to the UniV2 default
-      const buyFee = buyDexCfg.feeTiers?.[0] ?? buyDexCfg.defaultFee ?? 3000;
-      const sellFee = sellDexCfg.feeTiers?.[0] ?? sellDexCfg.defaultFee ?? 3000;
+      // Fee tier only applies to UniV2/UniV3 routers; Balancer uses 0 (fee is
+      // embedded in the pool ID and handled by the vault internally)
+      const buyFee =
+        buyDexCfg.type === "Balancer"
+          ? 0
+          : (buyDexCfg.feeTiers?.[0] ?? buyDexCfg.defaultFee ?? 3000);
+      const sellFee =
+        sellDexCfg.type === "Balancer"
+          ? 0
+          : (sellDexCfg.feeTiers?.[0] ?? sellDexCfg.defaultFee ?? 3000);
 
       const minOut1 = BigInt(
         Math.floor(Number(buyQuote.amountOut) * slippageFactor)
