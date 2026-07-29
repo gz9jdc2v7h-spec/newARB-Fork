@@ -415,12 +415,6 @@ export class OpportunityRanker {
             ? cfmmPriceImpact(sellQuote.reserveIn, tradeAmountIn, sellQuote.feeBps)
             : spread / 2;
 
-        // ── Liquidity depth — retained for future liquidity-depth scoring ─
-        // TODO: incorporate buyDepth into the Kelly score as a pool-size penalty
-        if (buyQuote.reserveIn !== undefined) {
-          cfmmLiquidityDepth(buyQuote.reserveIn, tokenInCfg.decimals, ethUsd);
-        }
-
         // ── Actual capital deployed for Kelly & portfolio scoring ─────────
         // tradeAmountIn × per-token USD price — correct for all token types.
         const tradeAmountInNormalized = Number(tradeAmountIn) / 10 ** tokenInCfg.decimals;
@@ -428,14 +422,29 @@ export class OpportunityRanker {
         // capitalUsd = actual capital deployed (not inflated by gas cost)
         const capitalUsd = tradeAmountInUsd;
 
+        // ── Liquidity depth penalty ───────────────────────────────────────
+        const buyDepthUsd =
+          buyQuote.reserveIn !== undefined
+            ? cfmmLiquidityDepth(
+                buyQuote.reserveIn,
+                tokenInCfg.decimals,
+                tokenInPriceUsd,
+              )
+            : Number.POSITIVE_INFINITY;
+        const depthPenalty =
+          Number.isFinite(buyDepthUsd) && buyDepthUsd > 0
+            ? 1 / (1 + capitalUsd / buyDepthUsd)
+            : 1;
+
         // ── Kelly risk-adjusted score ─────────────────────────────────────
         const volatilityFactor = pairStats ? 1 + pairStats.dailyVolatility * 10 : 1;
         const baseScore = kellyScore(netProfitUsd, gasCostUsd, capitalUsd, 0.88, volatilityFactor);
+        const depthAdjustedScore = baseScore * depthPenalty;
 
         // ── Multi-hop bonus: confirmed Bellman–Ford cycle → +15 % score ───
         const pairKey = cycleKey([tokenIn, tokenOut]);
         const isMultiHop = multiHopKeys.has(pairKey);
-        const score = isMultiHop ? baseScore * 1.15 : baseScore;
+        const score = isMultiHop ? depthAdjustedScore * 1.15 : depthAdjustedScore;
 
         const label = `${tokenIn}→${tokenOut} [${buyQuote.dex}↔${sellQuote.dex}]${isMultiHop ? " 🔄" : ""}`;
 

@@ -13,7 +13,7 @@
  * Every call path emits a LedgerRecord via the AuditLogger.
  */
 
-import { JsonRpcProvider } from 'ethers';
+import { JsonRpcProvider, keccak256 } from 'ethers';
 import type {
   ApexTxRequest,
   BuiltTx,
@@ -54,6 +54,7 @@ export class ApexTxSubmitter implements TxSubmitter {
   private readonly relaySubmitter?: PrivateRelaySubmitter;
   private readonly logger: AuditLogger;
   private readonly receiptTimeoutMs: number;
+  private readonly signedRequestCache = new Map<string, ApexTxRequest>();
 
   constructor(config: ApexTxSubmitterConfig) {
     this.provider = new JsonRpcProvider(config.rpcUrl);
@@ -89,18 +90,24 @@ export class ApexTxSubmitter implements TxSubmitter {
   }
 
   async sign(request: ApexTxRequest): Promise<SignedTx> {
-    return this.ethersAdapter.sign(request);
+    const signed = await this.ethersAdapter.sign(request);
+    this.signedRequestCache.set(keccak256(signed.rawTx), request);
+    return signed;
   }
 
   async submit(signed: SignedTx): Promise<SubmissionResult> {
-    // We need the originating request to determine relay policy.
-    // submit() receives a SignedTx, so relay policy was baked in at sign() time.
-    // Callers should use submitWithRequest() for relay-aware submission.
-    // This overload assumes public submission (used by tests / dry-run).
-    throw new Error(
-      'ApexTxSubmitter: call submitWithRequest(signed, request) instead of submit(signed). ' +
-        'Relay policy requires the original ApexTxRequest.',
-    );
+    const cacheKey = keccak256(signed.rawTx);
+    const request = this.signedRequestCache.get(cacheKey);
+
+    if (!request) {
+      throw new Error(
+        'ApexTxSubmitter: missing cached ApexTxRequest for signed transaction. ' +
+          'Ensure submit() is called with the SignedTx returned by this instance’s sign() method.',
+      );
+    }
+
+    this.signedRequestCache.delete(cacheKey);
+    return this.submitWithRequest(signed, request);
   }
 
   /**

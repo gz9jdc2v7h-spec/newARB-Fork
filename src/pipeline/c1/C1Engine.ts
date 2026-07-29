@@ -14,7 +14,7 @@
  *   7. Emit LedgerRecord
  */
 
-import { keccak256, toUtf8Bytes } from 'ethers';
+import { Interface, keccak256, toUtf8Bytes } from 'ethers';
 import type {
   ApexTxRequest,
   ConfigRecord,
@@ -32,9 +32,19 @@ import { AuditLogger } from '../transparency/AuditLogger.js';
 
 export type C1FlashProvider = 'aave' | 'balancer';
 
+const C1_FUNCTIONS = {
+  aave: 'initAaveFlash',
+  balancer: 'initBalancerFlash',
+} as const;
+
+const C1_INTERFACE = new Interface([
+  'function initAaveFlash(address,uint256,bytes)',
+  'function initBalancerFlash(address,uint256,bytes)',
+]);
+
 export const C1_SELECTORS: Record<C1FlashProvider, string> = {
-  aave:     '0x' + Buffer.from('initAaveFlash(address,uint256,bytes)').slice(0, 4).toString('hex'),
-  balancer: '0x' + Buffer.from('initBalancerFlash(address,uint256,bytes)').slice(0, 4).toString('hex'),
+  aave: C1_INTERFACE.getFunction(C1_FUNCTIONS.aave)!.selector,
+  balancer: C1_INTERFACE.getFunction(C1_FUNCTIONS.balancer)!.selector,
 };
 
 // ── Input to C1 execution ─────────────────────────────────────────────────────
@@ -175,15 +185,8 @@ export class C1Engine {
 // ── ABI encoding helpers ──────────────────────────────────────────────────────
 
 function encodeC1Calldata(req: C1ExecutionRequest): string {
-  // In production this would use ethers AbiCoder. Here we produce a
-  // deterministic placeholder that preserves the selector + params structure.
-  // Replace with full AbiCoder.encode when the executor ABI is finalized.
-  const { AbiCoder } = require('ethers');
-  const coder = AbiCoder.defaultAbiCoder();
-  const selector = C1_SELECTORS[req.flashProvider];
-  const encoded = coder.encode(
-    ['address', 'uint256', 'bytes'],
+  return C1_INTERFACE.encodeFunctionData(
+    C1_FUNCTIONS[req.flashProvider],
     [req.borrowAsset, req.borrowAmount, req.encodedRoutePayload],
   );
-  return selector + encoded.slice(2); // strip 0x from ABI body
 }

@@ -51,6 +51,12 @@ interface RelayResponse {
   error?: { code: number; message: string };
 }
 
+interface RelayRequestPayload {
+  method: string;
+  params: unknown[];
+  txHash: string;
+}
+
 export class PrivateRelaySubmitter {
   private readonly endpoint: string;
   private readonly relayName: string;
@@ -73,14 +79,6 @@ export class PrivateRelaySubmitter {
   // ── Submit ────────────────────────────────────────────────────────────────────
 
   async submit(signed: SignedTx, request: ApexTxRequest): Promise<SubmissionResult> {
-    const method = RELAY_METHODS[this.relayName] ?? RELAY_METHODS['default'];
-    const body = JSON.stringify({
-      jsonrpc: '2.0',
-      id: 1,
-      method,
-      params: [signed.rawTx],
-    });
-
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
     };
@@ -89,9 +87,17 @@ export class PrivateRelaySubmitter {
     }
 
     let relayResponse: RelayResponse | undefined;
+    let relayPayload: RelayRequestPayload | undefined;
     let submittedBlock = 0;
 
     try {
+      relayPayload = this.buildRelayPayload(signed, request);
+      const body = JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: relayPayload.method,
+        params: relayPayload.params,
+      });
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), this.timeoutMs);
 
@@ -117,7 +123,7 @@ export class PrivateRelaySubmitter {
       );
     }
 
-    const txHash = relayResponse.result ?? keccak256(signed.rawTx);
+    const txHash = relayPayload?.txHash ?? keccak256(signed.rawTx);
 
     try {
       submittedBlock = await this.fetchCurrentBlock();
@@ -207,6 +213,42 @@ export class PrivateRelaySubmitter {
     return parseInt(json.result ?? '0x0', 16);
   }
 
+  private buildRelayPayload(
+    signed: SignedTx,
+    request: ApexTxRequest,
+  ): RelayRequestPayload {
+    const method = RELAY_METHODS[this.relayName] ?? RELAY_METHODS['default'];
+    const rawTxHash = keccak256(signed.rawTx);
+
+    if (this.relayName !== 'flashbots') {
+      return {
+        method,
+        params: [signed.rawTx],
+        txHash: rawTxHash,
+      };
+    }
+
+    const targetBlock = request.blockNumber + 1;
+    if (request.expiresAtBlock < targetBlock) {
+      throw new Error(
+        `Flashbots bundle expires before the next block: expiresAtBlock=${request.expiresAtBlock}, nextBlock=${targetBlock}`,
+      );
+    }
+
+    return {
+      method,
+      params: [
+        {
+          txs: [signed.rawTx],
+          blockNumber: toRpcQuantity(targetBlock),
+          minTimestamp: Math.floor(Date.now() / 1000),
+          revertingTxHashes: [],
+        },
+      ],
+      txHash: rawTxHash,
+    };
+  }
+
   private buildFailedResult(
     signed: SignedTx,
     request: ApexTxRequest,
@@ -239,4 +281,8 @@ export class PrivateRelaySubmitter {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+function toRpcQuantity(value: number): string {
+  return `0x${Math.max(0, Math.trunc(value)).toString(16)}`;
 }
