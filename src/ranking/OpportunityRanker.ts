@@ -433,7 +433,7 @@ export class OpportunityRanker {
             : Number.POSITIVE_INFINITY;
         const depthPenalty =
           Number.isFinite(buyDepthUsd) && buyDepthUsd > 0
-            ? 1 / (1 + capitalUsd / buyDepthUsd)
+            ? Math.max(0.1, 1 / (1 + capitalUsd / buyDepthUsd))
             : 1;
 
         // ── Kelly risk-adjusted score ─────────────────────────────────────

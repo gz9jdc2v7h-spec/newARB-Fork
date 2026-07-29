@@ -28,8 +28,8 @@ const C1_INTERFACE = new ethers_1.Interface([
     'function initBalancerFlash(address,uint256,bytes)',
 ]);
 exports.C1_SELECTORS = {
-    aave: C1_INTERFACE.getFunction(C1_FUNCTIONS.aave).selector,
-    balancer: C1_INTERFACE.getFunction(C1_FUNCTIONS.balancer).selector,
+    aave: getRequiredSelector(C1_FUNCTIONS.aave),
+    balancer: getRequiredSelector(C1_FUNCTIONS.balancer),
 };
 // ── C1Engine ──────────────────────────────────────────────────────────────────
 class C1Engine {
@@ -119,5 +119,12 @@ exports.C1Engine = C1Engine;
 // ── ABI encoding helpers ──────────────────────────────────────────────────────
 function encodeC1Calldata(req) {
     return C1_INTERFACE.encodeFunctionData(C1_FUNCTIONS[req.flashProvider], [req.borrowAsset, req.borrowAmount, req.encodedRoutePayload]);
+}
+function getRequiredSelector(name) {
+    const fragment = C1_INTERFACE.getFunction(name);
+    if (!fragment) {
+        throw new Error(`C1Engine: missing ABI fragment for ${name}`);
+    }
+    return fragment.selector;
 }
 //# sourceMappingURL=C1Engine.js.map

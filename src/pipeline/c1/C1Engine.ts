@@ -42,9 +42,12 @@ const C1_INTERFACE = new Interface([
   'function initBalancerFlash(address,uint256,bytes)',
 ]);
 
+const AAVE_SELECTOR = getRequiredSelector(C1_FUNCTIONS.aave);
+const BALANCER_SELECTOR = getRequiredSelector(C1_FUNCTIONS.balancer);
+
 export const C1_SELECTORS: Record<C1FlashProvider, string> = {
-  aave: getRequiredSelector(C1_FUNCTIONS.aave),
-  balancer: getRequiredSelector(C1_FUNCTIONS.balancer),
+  aave: AAVE_SELECTOR,
+  balancer: BALANCER_SELECTOR,
 };
 
 // ── Input to C1 execution ─────────────────────────────────────────────────────
