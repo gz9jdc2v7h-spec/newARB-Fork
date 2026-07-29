@@ -17,6 +17,9 @@ export function assessOpportunityRisk(
   if (opportunity.priceImpactBuy > 0.05 || opportunity.priceImpactSell > 0.05) {
     flags.push("elevated_price_impact");
   }
+  if (opportunity.routeKind === "multi_hop" && !opportunity.multiHopRoute?.valid) {
+    flags.push("invalid_multi_hop_route");
+  }
   if (opportunity.tokenQuote === "USDC" || opportunity.tokenQuote === "USDT" || opportunity.tokenQuote === "DAI") {
     const stableDrift = Math.max(
       Math.abs(opportunity.buyQuote.price - opportunity.sellQuote.price) /

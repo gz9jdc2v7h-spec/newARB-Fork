@@ -8,6 +8,9 @@ const OpportunityRanker_1 = require("./ranking/OpportunityRanker");
 const Executor_1 = require("./execution/Executor");
 const logger_1 = require("./utils/logger");
 const helpers_1 = require("./utils/helpers");
+const RuntimeEventStream_1 = require("./runtime/RuntimeEventStream");
+const RiskControls_1 = require("./runtime/RiskControls");
+const ExecutionPolicy_1 = require("./runtime/ExecutionPolicy");
 // ─── Provider setup ───────────────────────────────────────────────────────────
 async function createHttpProvider() {
     let lastErr;
@@ -48,6 +51,15 @@ async function main() {
     logger_1.logger.info("=== Polygon ARB Bot starting ===");
     const httpProvider = await createHttpProvider();
     const wsProvider = await createWsProvider();
+    const eventStream = new RuntimeEventStream_1.RuntimeEventStream();
+    eventStream.on((event) => {
+        if (event.kind === "health" && event.status !== "ok") {
+            logger_1.logger.warn("Runtime event", event);
+        }
+        else if (event.kind !== "pending_tx") {
+            logger_1.logger.debug("Runtime event", event);
+        }
+    });
     // Verify network
     const network = await httpProvider.getNetwork();
     if (network.chainId !== BigInt(config_1.CHAIN_ID)) {
@@ -58,7 +70,7 @@ async function main() {
     // Only create executor when PRIVATE_KEY is set
     let executor = null;
     if (process.env["PRIVATE_KEY"]) {
-        executor = new Executor_1.Executor(httpProvider);
+        executor = new Executor_1.Executor(httpProvider, eventStream);
         logger_1.logger.info("Executor initialised — LIVE execution enabled");
     }
     else {
@@ -85,16 +97,36 @@ async function main() {
                 gasUsd: best.gasCostUsd.toFixed(2),
                 netUsd: best.netProfitUsd.toFixed(2),
                 score: best.score.toFixed(2),
+                invariantFamilies: best.invariantFamilies,
+                sizingMethod: best.sizingMethod,
+                quoteAgeMs: best.quoteAgeMs,
             });
             if (executor) {
-                await executor.execute(best);
+                const risk = (0, RiskControls_1.assessOpportunityRisk)(best);
+                const decision = (0, ExecutionPolicy_1.decideExecutionMode)({
+                    hasPrivateKey: Boolean(process.env["PRIVATE_KEY"]),
+                    routeKind: best.routeKind,
+                    requiresFlashLoan: best.routeKind === "multi_hop",
+                    quoteAgeMs: best.quoteAgeMs,
+                    supportsPrivateRelay: true,
+                    supportsAtomicFlash: false,
+                    expectedNetProfitUsd: best.netProfitUsd,
+                    riskFlags: risk.flags,
+                });
+                logger_1.logger.info("Execution decision", decision);
+                if (decision.shouldExecute && decision.mode === "sequential_live") {
+                    await executor.execute(best);
+                }
+                else if (!decision.shouldExecute) {
+                    eventStream.publishHealth("risk", "paused", `Execution paused: ${decision.rationale} (${decision.riskFlags.join(",") || "no-flags"})`, "risk");
+                }
             }
         }
         finally {
             processing = false;
         }
     };
-    const scanner = new OpportunityScanner_1.OpportunityScanner(httpProvider, wsProvider, handleSnapshot);
+    const scanner = new OpportunityScanner_1.OpportunityScanner(httpProvider, wsProvider, handleSnapshot, eventStream);
     scanner.start();
     // Keep alive — handle graceful shutdown
     const shutdown = async () => {

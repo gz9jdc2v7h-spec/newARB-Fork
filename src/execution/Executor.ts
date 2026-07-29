@@ -1,16 +1,24 @@
 import { ethers } from "ethers";
 import { ArbitrageOpportunity } from "../ranking/OpportunityRanker";
 import { getGasData } from "../ranking/GasEstimator";
-import { withRetry, deadline, toFloat } from "../utils/helpers";
+import { withRetry, deadline } from "../utils/helpers";
 import { logger } from "../utils/logger";
-import { TOKENS, getWallet, MAX_SLIPPAGE, DEXES, AAVE_POOL } from "../config";
 import {
+  DEXES,
+  ENABLE_MEMPOOL_REPRICING,
+  ENABLE_MULTI_HOP_EXECUTION,
+  MAX_SLIPPAGE,
+  TOKENS,
+} from "../config";
+import {
+  BALANCER_VAULT_ABI,
+  CURVE_POOL_ABI,
+  ERC20_ABI,
   UNIV2_ROUTER_ABI,
   UNIV3_ROUTER_ABI,
-  ERC20_ABI,
-  AAVE_POOL_ABI,
 } from "../discovery/abis";
 import { RuntimeEventStream } from "../runtime/RuntimeEventStream";
+import { MempoolRepricingManager } from "../runtime/MempoolRepricingManager";
 
 // ─── ERC-20 approval helper ───────────────────────────────────────────────────
 
@@ -97,6 +105,80 @@ async function executeUniV3Swap(
   return receipt;
 }
 
+async function executeBalancerSwap(
+  wallet: ethers.Wallet,
+  vaultAddress: string,
+  poolId: string,
+  tokenIn: string,
+  tokenOut: string,
+  amountIn: bigint,
+  amountOutMin: bigint,
+  gasData: Awaited<ReturnType<typeof getGasData>>
+): Promise<ethers.TransactionReceipt> {
+  const vault = new ethers.Contract(vaultAddress, BALANCER_VAULT_ABI, wallet);
+  await ensureApproval(wallet, tokenIn, vaultAddress, amountIn);
+
+  const tx: ethers.TransactionResponse = await vault.swap(
+    {
+      poolId,
+      kind: 0,
+      assetIn: tokenIn,
+      assetOut: tokenOut,
+      amount: amountIn,
+      userData: "0x",
+    },
+    {
+      sender: wallet.address,
+      fromInternalBalance: false,
+      recipient: wallet.address,
+      toInternalBalance: false,
+    },
+    amountOutMin,
+    deadline(),
+    {
+      maxFeePerGas: gasData.maxFeePerGas,
+      maxPriorityFeePerGas: gasData.maxPriorityFee,
+    }
+  );
+
+  logger.info("Balancer swap submitted", { hash: tx.hash });
+  const receipt = await tx.wait(1);
+  if (!receipt) throw new Error("No receipt for Balancer swap");
+  return receipt;
+}
+
+async function executeCurveSwap(
+  wallet: ethers.Wallet,
+  poolAddress: string,
+  i: number,
+  j: number,
+  tokenIn: string,
+  amountIn: bigint,
+  amountOutMin: bigint,
+  gasData: Awaited<ReturnType<typeof getGasData>>
+): Promise<ethers.TransactionReceipt> {
+  const pool = new ethers.Contract(poolAddress, CURVE_POOL_ABI, wallet);
+  await ensureApproval(wallet, tokenIn, poolAddress, amountIn);
+
+  let tx: ethers.TransactionResponse;
+  try {
+    tx = await pool.exchange(BigInt(i), BigInt(j), amountIn, amountOutMin, {
+      maxFeePerGas: gasData.maxFeePerGas,
+      maxPriorityFeePerGas: gasData.maxPriorityFee,
+    });
+  } catch {
+    tx = await pool.exchange(i, j, amountIn, amountOutMin, {
+      maxFeePerGas: gasData.maxFeePerGas,
+      maxPriorityFeePerGas: gasData.maxPriorityFee,
+    });
+  }
+
+  logger.info("Curve swap submitted", { hash: tx.hash });
+  const receipt = await tx.wait(1);
+  if (!receipt) throw new Error("No receipt for Curve swap");
+  return receipt;
+}
+
 // ─── Circuit breaker ─────────────────────────────────────────────────────────
 
 interface CircuitBreaker {
@@ -111,8 +193,8 @@ const circuitBreaker: CircuitBreaker = {
   open: false,
 };
 
-const CB_THRESHOLD = 3;         // consecutive failures to open
-const CB_RESET_MS = 30_000;     // 30 s cool-down
+const CB_THRESHOLD = 3; // consecutive failures to open
+const CB_RESET_MS = 30_000; // 30 s cool-down
 
 function checkCircuitBreaker(): boolean {
   if (!circuitBreaker.open) return true;
@@ -147,16 +229,21 @@ export class Executor {
   private provider: ethers.Provider;
   private wallet: ethers.Wallet;
   private readonly eventStream?: RuntimeEventStream;
+  private readonly repricer?: MempoolRepricingManager;
 
   constructor(provider: ethers.Provider, eventStream?: RuntimeEventStream) {
     this.provider = provider;
-    this.wallet = getWallet(provider);
+    this.wallet = new ethers.Wallet(process.env["PRIVATE_KEY"] ?? "", provider);
     this.eventStream = eventStream;
+    this.repricer = ENABLE_MEMPOOL_REPRICING
+      ? new MempoolRepricingManager(eventStream)
+      : undefined;
   }
 
   /**
    * Executes the best opportunity from a ranked list.
-   * Uses a two-leg sequential swap: buy on cheaper DEX, sell on pricier DEX.
+   * Uses a two-leg sequential swap by default and a concrete step-based path
+   * when multi-hop execution is enabled and available.
    */
   async execute(opportunity: ArbitrageOpportunity): Promise<boolean> {
     if (!checkCircuitBreaker()) {
@@ -168,29 +255,35 @@ export class Executor {
     logger.info("Executing opportunity", {
       label,
       netProfitUsd: opportunity.netProfitUsd.toFixed(2),
+      routeKind: opportunity.routeKind,
     });
 
     try {
       const gasData = await getGasData(this.provider);
 
+      if (
+        ENABLE_MULTI_HOP_EXECUTION &&
+        opportunity.routeKind === "multi_hop" &&
+        opportunity.multiHopRoute?.valid
+      ) {
+        return this.executeMultiHop(opportunity, gasData);
+      }
+
       const tokenInCfg = TOKENS[buyQuote.tokenIn]!;
       const tokenOutCfg = TOKENS[buyQuote.tokenOut]!;
 
       // ── Leg 1: sell tokenIn on the higher-price DEX (sellQuote) ────────────
-      // Selling where tokenIn is worth MORE maximises the tokenOut received.
       const slippageFactor = 1 - MAX_SLIPPAGE;
-      const minOut1 = BigInt(
-        Math.floor(Number(sellQuote.amountOut) * slippageFactor)
-      );
+      const minOut1 = BigInt(Math.floor(Number(sellQuote.amountOut) * slippageFactor));
 
       const sellDexCfg = DEXES.find((d) => d.name === sellQuote.dex)!;
       let receipt1: ethers.TransactionReceipt;
 
-      if (sellDexCfg.type === "UniV2") {
+      if (sellDexCfg.type === "UniV2" && sellDexCfg.router) {
         receipt1 = await withRetry(() =>
           executeUniV2Swap(
             this.wallet,
-            sellDexCfg.router,
+            sellDexCfg.router!,
             tokenInCfg.address,
             tokenOutCfg.address,
             tradeAmountIn,
@@ -198,12 +291,12 @@ export class Executor {
             gasData
           )
         );
-      } else {
-        const fee = sellDexCfg.feeTiers?.[0] ?? 3000;
+      } else if (sellDexCfg.type === "UniV3" && sellDexCfg.router) {
+        const fee = Number(sellQuote.metadata?.feeTier ?? sellDexCfg.feeTiers?.[0] ?? 3000);
         receipt1 = await withRetry(() =>
           executeUniV3Swap(
             this.wallet,
-            sellDexCfg.router,
+            sellDexCfg.router!,
             tokenInCfg.address,
             tokenOutCfg.address,
             fee,
@@ -212,25 +305,56 @@ export class Executor {
             gasData
           )
         );
+      } else if (sellDexCfg.type === "Balancer" && sellDexCfg.vault) {
+        const poolId = String(sellQuote.metadata?.poolId ?? "");
+        if (!poolId) throw new Error("Missing Balancer poolId metadata for sell leg");
+        receipt1 = await withRetry(() =>
+          executeBalancerSwap(
+            this.wallet,
+            sellDexCfg.vault!,
+            poolId,
+            tokenInCfg.address,
+            tokenOutCfg.address,
+            tradeAmountIn,
+            minOut1,
+            gasData
+          )
+        );
+      } else if (sellDexCfg.type === "Curve") {
+        const pool = String(sellQuote.metadata?.pool ?? "");
+        const i = Number(sellQuote.metadata?.i ?? -1);
+        const j = Number(sellQuote.metadata?.j ?? -1);
+        if (!pool || i < 0 || j < 0) {
+          throw new Error("Missing Curve pool metadata for sell leg");
+        }
+        receipt1 = await withRetry(() =>
+          executeCurveSwap(
+            this.wallet,
+            pool,
+            i,
+            j,
+            tokenInCfg.address,
+            tradeAmountIn,
+            minOut1,
+            gasData
+          )
+        );
+      } else {
+        throw new Error(`Unsupported sell DEX type: ${sellDexCfg.type}`);
       }
 
-      logger.info("Leg 1 confirmed", { hash: receipt1.hash, gas: receipt1.gasUsed.toString() });
-      this.eventStream?.publishReceipt({
-        txHash: receipt1.hash,
-        receiptStatus: receipt1.status === 1,
-        confirmedBlock: receipt1.blockNumber,
-        gasUsed: receipt1.gasUsed.toString(),
-        rawReceipt: {},
-        effectiveGasPrice: receipt1.gasPrice?.toString() ?? "0",
-        gasCostWei: ((receipt1.gasPrice ?? 0n) * receipt1.gasUsed).toString(),
-        from: receipt1.from,
-        to: receipt1.to ?? "",
-        logs: [],
-      }, "executor");
+      this.repricer?.registerSubmission(label, receipt1.hash);
+      this.eventStream?.publishExecutionStatus({
+        source: "executor",
+        opportunityId: label,
+        mode: "sequential_live",
+        status: "submitted",
+        detail: receipt1.hash,
+      });
 
-      // ── Leg 2: buy tokenIn back on the lower-price DEX (buyQuote) ──────────
-      // Buying back where tokenIn costs LESS maximises the round-trip profit.
-      // Use the actual output from leg 1 as input to leg 2.
+      logger.info("Leg 1 confirmed", { hash: receipt1.hash, gas: receipt1.gasUsed.toString() });
+      this.publishReceipt(receipt1);
+
       const actualOut1 = await this.getActualOutput(receipt1, tokenOutCfg.address);
       if (actualOut1 === 0n) {
         throw new Error("Leg 1 produced no output — aborting before leg 2");
@@ -240,11 +364,11 @@ export class Executor {
       const buyDexCfg = DEXES.find((d) => d.name === buyQuote.dex)!;
       let receipt2: ethers.TransactionReceipt;
 
-      if (buyDexCfg.type === "UniV2") {
+      if (buyDexCfg.type === "UniV2" && buyDexCfg.router) {
         receipt2 = await withRetry(() =>
           executeUniV2Swap(
             this.wallet,
-            buyDexCfg.router,
+            buyDexCfg.router!,
             tokenOutCfg.address,
             tokenInCfg.address,
             actualOut1,
@@ -252,12 +376,12 @@ export class Executor {
             gasData
           )
         );
-      } else {
-        const fee = buyDexCfg.feeTiers?.[0] ?? 3000;
+      } else if (buyDexCfg.type === "UniV3" && buyDexCfg.router) {
+        const fee = Number(buyQuote.metadata?.feeTier ?? buyDexCfg.feeTiers?.[0] ?? 3000);
         receipt2 = await withRetry(() =>
           executeUniV3Swap(
             this.wallet,
-            buyDexCfg.router,
+            buyDexCfg.router!,
             tokenOutCfg.address,
             tokenInCfg.address,
             fee,
@@ -266,29 +390,151 @@ export class Executor {
             gasData
           )
         );
+      } else if (buyDexCfg.type === "Balancer" && buyDexCfg.vault) {
+        const poolId = String(buyQuote.metadata?.poolId ?? "");
+        if (!poolId) throw new Error("Missing Balancer poolId metadata for buy leg");
+        receipt2 = await withRetry(() =>
+          executeBalancerSwap(
+            this.wallet,
+            buyDexCfg.vault!,
+            poolId,
+            tokenOutCfg.address,
+            tokenInCfg.address,
+            actualOut1,
+            minOut2,
+            gasData
+          )
+        );
+      } else if (buyDexCfg.type === "Curve") {
+        const pool = String(buyQuote.metadata?.pool ?? "");
+        const i = Number(buyQuote.metadata?.j ?? -1);
+        const j = Number(buyQuote.metadata?.i ?? -1);
+        if (!pool || i < 0 || j < 0) {
+          throw new Error("Missing Curve pool metadata for buy leg");
+        }
+        receipt2 = await withRetry(() =>
+          executeCurveSwap(
+            this.wallet,
+            pool,
+            i,
+            j,
+            tokenOutCfg.address,
+            actualOut1,
+            minOut2,
+            gasData
+          )
+        );
+      } else {
+        throw new Error(`Unsupported buy DEX type: ${buyDexCfg.type}`);
       }
 
       logger.info("Leg 2 confirmed", { hash: receipt2.hash, gas: receipt2.gasUsed.toString() });
-      this.eventStream?.publishReceipt({
-        txHash: receipt2.hash,
-        receiptStatus: receipt2.status === 1,
-        confirmedBlock: receipt2.blockNumber,
-        gasUsed: receipt2.gasUsed.toString(),
-        rawReceipt: {},
-        effectiveGasPrice: receipt2.gasPrice?.toString() ?? "0",
-        gasCostWei: ((receipt2.gasPrice ?? 0n) * receipt2.gasUsed).toString(),
-        from: receipt2.from,
-        to: receipt2.to ?? "",
-        logs: [],
-      }, "executor");
+      this.publishReceipt(receipt2);
+      this.repricer?.markConfirmed(label, receipt2.hash);
+      this.eventStream?.publishExecutionStatus({
+        source: "executor",
+        opportunityId: label,
+        mode: "sequential_live",
+        status: "confirmed",
+        detail: receipt2.hash,
+      });
 
       recordSuccess();
       return true;
     } catch (err) {
       logger.error("Execution failed", { label, err: String(err) });
+      this.repricer?.markReverted(label, String(err));
+      this.eventStream?.publishExecutionStatus({
+        source: "executor",
+        opportunityId: label,
+        mode: "sequential_live",
+        status: "reverted",
+        detail: String(err),
+      });
       recordFailure();
       return false;
     }
+  }
+
+  private async executeMultiHop(
+    opportunity: ArbitrageOpportunity,
+    gasData: Awaited<ReturnType<typeof getGasData>>
+  ): Promise<boolean> {
+    const route = opportunity.multiHopRoute;
+    if (!route?.valid) return false;
+
+    this.eventStream?.publishExecutionStatus({
+      source: "executor",
+      opportunityId: opportunity.label,
+      mode: "multi_hop",
+      status: "submitted",
+      detail: route.routeId,
+    });
+
+    for (const step of route.steps) {
+      const dex = DEXES.find((d) => d.name === step.dex);
+      const tokenInCfg = TOKENS[step.tokenIn];
+      const tokenOutCfg = TOKENS[step.tokenOut];
+      if (!dex || !tokenInCfg || !tokenOutCfg || !dex.router) {
+        throw new Error(`Unsupported multi-hop step ${step.dex} ${step.tokenIn}/${step.tokenOut}`);
+      }
+
+      const amountIn = BigInt(step.amountIn);
+      const minOut = BigInt(
+        Math.floor(Number(step.expectedOut) * Math.max(0, 1 - MAX_SLIPPAGE))
+      );
+
+      const receipt =
+        dex.type === "UniV2"
+          ? await executeUniV2Swap(
+              this.wallet,
+              dex.router,
+              tokenInCfg.address,
+              tokenOutCfg.address,
+              amountIn,
+              minOut,
+              gasData
+            )
+          : await executeUniV3Swap(
+              this.wallet,
+              dex.router,
+              tokenInCfg.address,
+              tokenOutCfg.address,
+              dex.feeTiers?.[0] ?? 3000,
+              amountIn,
+              minOut,
+              gasData
+            );
+
+      this.publishReceipt(receipt);
+    }
+
+    this.eventStream?.publishExecutionStatus({
+      source: "executor",
+      opportunityId: opportunity.label,
+      mode: "multi_hop",
+      status: "confirmed",
+      detail: route.routeId,
+    });
+    return true;
+  }
+
+  private publishReceipt(receipt: ethers.TransactionReceipt): void {
+    this.eventStream?.publishReceipt(
+      {
+        txHash: receipt.hash,
+        receiptStatus: receipt.status === 1,
+        confirmedBlock: receipt.blockNumber,
+        gasUsed: receipt.gasUsed.toString(),
+        rawReceipt: {},
+        effectiveGasPrice: receipt.gasPrice?.toString() ?? "0",
+        gasCostWei: ((receipt.gasPrice ?? 0n) * receipt.gasUsed).toString(),
+        from: receipt.from,
+        to: receipt.to ?? "",
+        logs: [],
+      },
+      "executor"
+    );
   }
 
   /**

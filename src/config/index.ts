@@ -84,10 +84,25 @@ export const QUOTE_MAX_AGE_MS = parseInt(
 );
 export const ENABLE_ATOMIC_FLASH = optionalEnv("ENABLE_ATOMIC_FLASH", "false") === "true";
 export const ENABLE_PRIVATE_RELAY = optionalEnv("ENABLE_PRIVATE_RELAY", "false") === "true";
+export const ENABLE_BALANCER_QUOTES = optionalEnv("ENABLE_BALANCER_QUOTES", "true") === "true";
+export const ENABLE_CURVE_QUOTES = optionalEnv("ENABLE_CURVE_QUOTES", "true") === "true";
+export const ENABLE_MULTI_HOP_EXECUTION = optionalEnv("ENABLE_MULTI_HOP_EXECUTION", "false") === "true";
+export const ENABLE_MEMPOOL_REPRICING = optionalEnv("ENABLE_MEMPOOL_REPRICING", "false") === "true";
+export const ENABLE_PRODUCTION_OBSERVABILITY = optionalEnv("ENABLE_PRODUCTION_OBSERVABILITY", "true") === "true";
 export const MAX_PENDING_TX_PER_BLOCK = parseInt(
   optionalEnv("MAX_PENDING_TX_PER_BLOCK", "128"),
   10
 );
+export const ROUTING_MAX_HOPS = parseInt(optionalEnv("ROUTING_MAX_HOPS", "4"), 10);
+export const FLASH_MAX_ROUTE_STEPS = parseInt(optionalEnv("FLASH_MAX_ROUTE_STEPS", "4"), 10);
+export const REPRICE_TIMEOUT_MS = parseInt(optionalEnv("REPRICE_TIMEOUT_MS", "15000"), 10);
+export const REPRICE_FEE_BUMP_BPS = parseInt(optionalEnv("REPRICE_FEE_BUMP_BPS", "1500"), 10);
+export const REPRICE_MAX_ATTEMPTS = parseInt(optionalEnv("REPRICE_MAX_ATTEMPTS", "2"), 10);
+export const PUBLIC_FALLBACK = optionalEnv("PUBLIC_FALLBACK", "false") === "true";
+export const PRIVATE_RELAY_ENDPOINT = process.env["PRIVATE_RELAY_ENDPOINT"] ?? "";
+export const PRIVATE_RELAY_NAME = optionalEnv("PRIVATE_RELAY_NAME", "fastlane");
+export const FLASH_EXECUTOR_ADDRESS = process.env["FLASH_EXECUTOR_ADDRESS"] ?? "";
+export const FLASH_SIGNER_PRIVATE_KEY = process.env["FLASH_SIGNER_PRIVATE_KEY"] ?? process.env["PRIVATE_KEY"] ?? "";
 
 // ─── Flash Loan ──────────────────────────────────────────────────────────────
 export const AAVE_POOL = optionalEnv(
@@ -134,15 +149,40 @@ export const TOKENS: Record<string, { address: string; decimals: number; symbol:
 
 export interface DexConfig {
   name: string;
-  type: "UniV2" | "UniV3" | "Balancer";
+  type: "UniV2" | "UniV3" | "Balancer" | "Curve";
   factory?: string;       // UniV2 / UniV3
   quoter?: string;        // UniV3
-  router: string;
+  router?: string;
   vault?: string;         // Balancer
   feeTiers?: number[];    // UniV3 (in bps * 100, e.g. 3000 = 0.3%)
   defaultFee?: number;    // UniV2 fee (e.g. 3000 = 0.3%)
   /** Balancer V2: known pool IDs to query. Token symbols must match TOKENS keys. */
   pools?: Array<{ poolId: string; tokens: string[] }>;
+}
+
+export interface BalancerPoolConfig {
+  poolId: string;
+  tokenIn: string;
+  tokenOut: string;
+  swapFeeBps?: number;
+  enabled?: boolean;
+}
+
+export interface CurvePoolConfig {
+  name: string;
+  pool: string;
+  tokenSymbols: string[];
+  tokenAddresses: string[];
+}
+
+function parseJsonEnv<T>(key: string, fallback: T): T {
+  const raw = process.env[key];
+  if (!raw) return fallback;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return fallback;
+  }
 }
 
 export const DEXES: DexConfig[] = [
@@ -200,7 +240,29 @@ export const DEXES: DexConfig[] = [
       },
     ],
   },
+  {
+    name: "Curve",
+    type: "Curve",
+    router: "0x0000000000000000000000000000000000000000",
+  },
 ];
+
+export const BALANCER_POOLS: BalancerPoolConfig[] = parseJsonEnv<BalancerPoolConfig[]>(
+  "BALANCER_POOLS",
+  []
+).filter((pool) => (pool.enabled ?? true) && Boolean(pool.poolId));
+
+export const CURVE_POOLS: CurvePoolConfig[] = parseJsonEnv<CurvePoolConfig[]>(
+  "CURVE_POOLS",
+  []
+).filter(
+  (pool) =>
+    Boolean(pool.pool) &&
+    Array.isArray(pool.tokenSymbols) &&
+    Array.isArray(pool.tokenAddresses) &&
+    pool.tokenSymbols.length >= 2 &&
+    pool.tokenSymbols.length === pool.tokenAddresses.length
+);
 
 // Pairs to monitor (base token → quote tokens)
 export const SCAN_PAIRS: Array<[string, string]> = [

@@ -10,6 +10,7 @@ export type SubmissionStatus = 'SUBMITTED_PRIVATE' | 'SUBMITTED_PUBLIC' | 'FAILE
 export type ReceiptStatus = 'PENDING' | 'CONFIRMED' | 'REVERTED' | 'EXPIRED';
 export type SettlementStatus = 'SETTLED' | 'FAILED' | 'PENDING' | 'REVERTED';
 export type MachineMode = 'dry_run' | 'sim_only' | 'live';
+export type ExecutionMode = 'dry_run' | 'sequential_live' | 'private_relay_live' | 'atomic_flash';
 /** Everything the submitter needs to build, sign, and send one transaction. */
 export interface ApexTxRequest {
     opportunityId: string;
@@ -193,6 +194,8 @@ export interface ProfitRecord {
     simulatedNetUsd?: string;
     submittedNetUsd?: string;
     realizedNetUsd?: string;
+    sizingMethod?: string;
+    invariantFamilies?: string[];
 }
 export interface SimulationRecord {
     simulationStatus: 'PASSED' | 'FAILED';
@@ -230,6 +233,18 @@ export interface SettlementRecord {
     realizedNetUsd: string;
     settlementStatus: SettlementStatus;
 }
+export interface MarketContextRecord {
+    observedEventCount: number;
+    latestBlockNumber?: number;
+    pendingTxCount?: number;
+    quoteAgeMs?: number;
+}
+export interface ExecutionDecisionRecord {
+    mode: ExecutionMode;
+    shouldExecute: boolean;
+    rationale: string;
+    riskFlags: string[];
+}
 /** Complete evidence chain for one opportunity. */
 export interface OpportunityEvidenceChain {
     opportunityId: string;
@@ -246,11 +261,13 @@ export interface OpportunityEvidenceChain {
     state?: StateRecord;
     route?: RouteRecord;
     profit?: ProfitRecord;
+    marketContext?: MarketContextRecord;
     simulation?: SimulationRecord;
     payload?: PayloadRecord;
     submission?: SubmissionResult;
     settlement?: SettlementRecord;
     rejection?: RejectionRecord;
+    executionDecision?: ExecutionDecisionRecord;
     c1?: {
         cycleId: string;
         preC1StateHash: string;
