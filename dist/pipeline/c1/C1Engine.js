@@ -19,9 +19,17 @@ exports.C1Engine = exports.C1_SELECTORS = void 0;
 const ethers_1 = require("ethers");
 const EvidenceChain_js_1 = require("../transparency/EvidenceChain.js");
 const AuditLogger_js_1 = require("../transparency/AuditLogger.js");
+const C1_FUNCTIONS = {
+    aave: 'initAaveFlash',
+    balancer: 'initBalancerFlash',
+};
+const C1_INTERFACE = new ethers_1.Interface([
+    'function initAaveFlash(address,uint256,bytes)',
+    'function initBalancerFlash(address,uint256,bytes)',
+]);
 exports.C1_SELECTORS = {
-    aave: '0x' + Buffer.from('initAaveFlash(address,uint256,bytes)').slice(0, 4).toString('hex'),
-    balancer: '0x' + Buffer.from('initBalancerFlash(address,uint256,bytes)').slice(0, 4).toString('hex'),
+    aave: C1_INTERFACE.getFunction(C1_FUNCTIONS.aave).selector,
+    balancer: C1_INTERFACE.getFunction(C1_FUNCTIONS.balancer).selector,
 };
 // ── C1Engine ──────────────────────────────────────────────────────────────────
 class C1Engine {
@@ -110,13 +118,6 @@ class C1Engine {
 exports.C1Engine = C1Engine;
 // ── ABI encoding helpers ──────────────────────────────────────────────────────
 function encodeC1Calldata(req) {
-    // In production this would use ethers AbiCoder. Here we produce a
-    // deterministic placeholder that preserves the selector + params structure.
-    // Replace with full AbiCoder.encode when the executor ABI is finalized.
-    const { AbiCoder } = require('ethers');
-    const coder = AbiCoder.defaultAbiCoder();
-    const selector = exports.C1_SELECTORS[req.flashProvider];
-    const encoded = coder.encode(['address', 'uint256', 'bytes'], [req.borrowAsset, req.borrowAmount, req.encodedRoutePayload]);
-    return selector + encoded.slice(2); // strip 0x from ABI body
+    return C1_INTERFACE.encodeFunctionData(C1_FUNCTIONS[req.flashProvider], [req.borrowAsset, req.borrowAmount, req.encodedRoutePayload]);
 }
 //# sourceMappingURL=C1Engine.js.map

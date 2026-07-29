@@ -39,6 +39,7 @@ export declare class ApexTxSubmitter implements TxSubmitter {
     private readonly relaySubmitter?;
     private readonly logger;
     private readonly receiptTimeoutMs;
+    private readonly signedRequestCache;
     constructor(config: ApexTxSubmitterConfig);
     build(request: ApexTxRequest): Promise<BuiltTx>;
     sign(request: ApexTxRequest): Promise<SignedTx>;

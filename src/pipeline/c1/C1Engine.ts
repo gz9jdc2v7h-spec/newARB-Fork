@@ -43,8 +43,8 @@ const C1_INTERFACE = new Interface([
 ]);
 
 export const C1_SELECTORS: Record<C1FlashProvider, string> = {
-  aave: C1_INTERFACE.getFunction(C1_FUNCTIONS.aave)!.selector,
-  balancer: C1_INTERFACE.getFunction(C1_FUNCTIONS.balancer)!.selector,
+  aave: getRequiredSelector(C1_FUNCTIONS.aave),
+  balancer: getRequiredSelector(C1_FUNCTIONS.balancer),
 };
 
 // ── Input to C1 execution ─────────────────────────────────────────────────────
@@ -189,4 +189,12 @@ function encodeC1Calldata(req: C1ExecutionRequest): string {
     C1_FUNCTIONS[req.flashProvider],
     [req.borrowAsset, req.borrowAmount, req.encodedRoutePayload],
   );
+}
+
+function getRequiredSelector(name: (typeof C1_FUNCTIONS)[C1FlashProvider]): string {
+  const fragment = C1_INTERFACE.getFunction(name);
+  if (!fragment) {
+    throw new Error(`C1Engine: missing ABI fragment for ${name}`);
+  }
+  return fragment.selector;
 }

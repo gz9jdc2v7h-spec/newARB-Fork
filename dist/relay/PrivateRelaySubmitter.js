@@ -40,13 +40,6 @@ class PrivateRelaySubmitter {
     }
     // ── Submit ────────────────────────────────────────────────────────────────────
     async submit(signed, request) {
-        const method = RELAY_METHODS[this.relayName] ?? RELAY_METHODS['default'];
-        const body = JSON.stringify({
-            jsonrpc: '2.0',
-            id: 1,
-            method,
-            params: [signed.rawTx],
-        });
         const headers = {
             'Content-Type': 'application/json',
         };
@@ -54,8 +47,16 @@ class PrivateRelaySubmitter {
             headers['Authorization'] = this.authHeader;
         }
         let relayResponse;
+        let relayPayload;
         let submittedBlock = 0;
         try {
+            relayPayload = this.buildRelayPayload(signed, request);
+            const body = JSON.stringify({
+                jsonrpc: '2.0',
+                id: 1,
+                method: relayPayload.method,
+                params: relayPayload.params,
+            });
             const controller = new AbortController();
             const timer = setTimeout(() => controller.abort(), this.timeoutMs);
             const res = await fetch(this.endpoint, {
@@ -74,7 +75,7 @@ class PrivateRelaySubmitter {
         if (relayResponse.error) {
             return this.buildFailedResult(signed, request, `Relay rejected: [${relayResponse.error.code}] ${relayResponse.error.message}`);
         }
-        const txHash = relayResponse.result ?? (0, ethers_1.keccak256)(signed.rawTx);
+        const txHash = relayPayload?.txHash ?? (0, ethers_1.keccak256)(signed.rawTx);
         try {
             submittedBlock = await this.fetchCurrentBlock();
         }
@@ -147,6 +148,33 @@ class PrivateRelaySubmitter {
         const json = (await res.json());
         return parseInt(json.result ?? '0x0', 16);
     }
+    buildRelayPayload(signed, request) {
+        const method = RELAY_METHODS[this.relayName] ?? RELAY_METHODS['default'];
+        const rawTxHash = (0, ethers_1.keccak256)(signed.rawTx);
+        if (this.relayName !== 'flashbots') {
+            return {
+                method,
+                params: [signed.rawTx],
+                txHash: rawTxHash,
+            };
+        }
+        const targetBlock = request.blockNumber + 1;
+        if (request.expiresAtBlock < targetBlock) {
+            throw new Error(`Flashbots bundle expires before the next block: expiresAtBlock=${request.expiresAtBlock}, nextBlock=${targetBlock}`);
+        }
+        return {
+            method,
+            params: [
+                {
+                    txs: [signed.rawTx],
+                    blockNumber: toRpcQuantity(targetBlock),
+                    minTimestamp: Math.floor(Date.now() / 1000),
+                    revertingTxHashes: [],
+                },
+            ],
+            txHash: rawTxHash,
+        };
+    }
     buildFailedResult(signed, request, errorMsg) {
         return {
             opportunityId: request.opportunityId,
@@ -175,5 +203,8 @@ class PrivateRelaySubmitter {
 exports.PrivateRelaySubmitter = PrivateRelaySubmitter;
 function sleep(ms) {
     return new Promise((r) => setTimeout(r, ms));
+}
+function toRpcQuantity(value) {
+    return `0x${Math.max(0, Math.trunc(value)).toString(16)}`;
 }
 //# sourceMappingURL=PrivateRelaySubmitter.js.map
