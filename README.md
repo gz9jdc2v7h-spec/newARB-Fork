@@ -108,7 +108,7 @@ The discovery layer is responsible for building a fresh market snapshot across c
   - Uniswap V3
   - SushiSwap V2
   - QuickSwap V2
-- **DEX configured in the repo but not yet presented here as a fully active quote path**
+- **DEX configured in the repo for future quote-path expansion**
   - Balancer V2
 - **Tokens**
   - WMATIC
@@ -132,7 +132,7 @@ The discovery layer is responsible for building a fresh market snapshot across c
 
 - **UniV2-style venues** use reserve-based quote logic.
 - **UniV3** uses quoter-based pricing.
-- **Balancer V2** is wired into configuration and capability reporting, with quote support signaled as not yet complete.
+- **Balancer V2** is configured in the repo, but the current discovery implementation explicitly skips Balancer quoting pending the pool-id / on-chain quote path work.
 
 **Discovery metrics exposed by the code**
 
@@ -264,6 +264,12 @@ The repository also includes a more formal transaction-submission architecture f
 - receipt normalization,
 - audit and evidence logging hooks,
 - C1/C2 pipeline hooks for staged execution models.
+
+**Flash-loan pipeline status**
+
+- the repository includes C1 pipeline hooks that encode `initAaveFlash` and `initBalancerFlash`,
+- `AAVE_POOL` is already exposed in configuration,
+- this flash-loan-oriented pipeline infrastructure sits alongside the main runtime and should be treated as advanced execution plumbing rather than the default `src/index.ts` path.
 
 This means the repository is not only a scanner/executor; it also contains infrastructure for a stronger execution-control and observability model.
 
@@ -464,6 +470,8 @@ That distinction matters. A professional deployment should treat:
 | Evidence / audit hooks | Yes | supports post-trade review and traceability |
 | Built-in live dry-run | Yes | validates live discovery/ranking without trading |
 | Formal TypeScript unit tests | Not present in package scripts today | build/typecheck remain the primary TS validation surface |
+
+Testing strategy note: deterministic scanner and CFMM behaviors are covered in the Python validation suite, while the TypeScript runtime is primarily validated through compilation, type-checking, and live dry-run output.
 
 ---
 
