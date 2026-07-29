@@ -34,6 +34,18 @@ export class LiquidationEngine {
   }
 
   async execute(req: LiquidationExecutionRequest): Promise<LiquidationExecutionResult> {
+    const healthFactor = Number(req.healthFactor);
+    const maxHealthFactorToLiquidate = Number(req.maxHealthFactorToLiquidate);
+
+    if (!Number.isFinite(healthFactor) || !Number.isFinite(maxHealthFactorToLiquidate)) {
+      return {
+        cycleId: req.cycleId,
+        decision: 'NO_OP',
+        skipped: true,
+        reason: 'INVALID_HEALTH_FACTOR',
+      };
+    }
+
     if (req.postTriggerState.stateHash !== req.reloadedStateHash) {
       this.logger.logRejection({
         opportunityId: req.opportunityId,
@@ -71,7 +83,7 @@ export class LiquidationEngine {
       };
     }
 
-    if (Number(req.healthFactor) > Number(req.maxHealthFactorToLiquidate)) {
+    if (healthFactor > maxHealthFactorToLiquidate) {
       return {
         cycleId: req.cycleId,
         decision: 'NO_OP',

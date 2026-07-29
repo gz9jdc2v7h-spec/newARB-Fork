@@ -227,7 +227,7 @@ export class C2Engine {
         reason: 'C2_DYNAMIC_REUSE_DETECTED',
         configVersion: req.config.configVersion,
         stateHash: postC1StateHash,
-        routeHash: c2RouteHash,
+        routeHash: c2RouteHash ?? '0x0',
         detail: 'Rejected due to C1 dynamic artifact reuse attempt',
         timestamp: Date.now(),
       });
