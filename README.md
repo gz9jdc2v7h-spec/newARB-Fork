@@ -88,9 +88,12 @@ npm start
 
 | Variable | Default | Description |
 |---|---|---|
-| `POLYGON_RPC_HTTP` | public Polygon RPC | Primary HTTP endpoint |
-| `POLYGON_RPC_HTTP_FALLBACK` | publicnode.com | Fallback HTTP endpoint |
-| `POLYGON_RPC_WS` | _(none)_ | WebSocket endpoint for block subscriptions |
+| `POLYGON_RPC_HTTP` | `https://polygon-rpc.com` | Primary HTTP endpoint |
+| `POLYGON_RPC_HTTP_FALLBACK` | `https://polygon-bor-rpc.publicnode.com` | Fallback HTTP endpoint |
+| `POLYGON_RPC_WS` | `wss://polygon-bor-rpc.publicnode.com` | Primary WebSocket endpoint |
+| `POLYGON_RPC_WS_FALLBACK` | `wss://polygon-heimdall-rpc.publicnode.com:443/websocket` | Approved WebSocket fallback |
+| `POLYGON_RPC_HTTP_CANDIDATES` | `polygon-bor-rpc.publicnode.com, polygon-rpc.com, rpc.ankr.com/polygon, polygon.llamarpc.com` | Comma-separated HTTP probe list |
+| `POLYGON_RPC_WS_CANDIDATES` | `polygon-bor-rpc.publicnode.com, polygon-heimdall-rpc.publicnode.com:443/websocket` | Comma-separated WS probe list |
 | `PRIVATE_KEY` | _(none)_ | Executor wallet — omit for dry-run |
 | `MIN_PROFIT_USD` | `5.0` | Minimum net profit to execute (USD) |
 | `MAX_GAS_PRICE_GWEI` | `2.0` | Maximum gas price willing to pay (Gwei) |

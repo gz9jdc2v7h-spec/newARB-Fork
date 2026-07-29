@@ -11,6 +11,15 @@ function optionalEnv(key: string, defaultValue: string): string {
   return process.env[key] ?? defaultValue;
 }
 
+function csvEnv(key: string, defaultValue: string[]): string[] {
+  const raw = process.env[key];
+  if (!raw) return defaultValue;
+  return raw
+    .split(",")
+    .map((v) => v.trim())
+    .filter((v) => v.length > 0);
+}
+
 // ─── Network ────────────────────────────────────────────────────────────────
 export const CHAIN_ID = 137; // Polygon PoS
 
@@ -23,6 +32,23 @@ export const RPC_HTTP_FALLBACK = optionalEnv(
   optionalEnv("ARB_RPC_HTTP_FALLBACK", "https://polygon-bor-rpc.publicnode.com")
 );
 export const RPC_WS = process.env["POLYGON_RPC_WS"] ?? process.env["ARB_RPC_WS"];
+export const RPC_WS_FALLBACK = process.env["POLYGON_RPC_WS_FALLBACK"];
+
+export const RPC_HTTP_CANDIDATES = csvEnv("POLYGON_RPC_HTTP_CANDIDATES", [
+  "https://polygon-bor-rpc.publicnode.com",
+  "https://polygon-rpc.com",
+  "https://rpc.ankr.com/polygon",
+  "https://polygon.llamarpc.com",
+  RPC_HTTP,
+  RPC_HTTP_FALLBACK,
+]).filter((v, i, arr) => v.length > 0 && arr.indexOf(v) === i);
+
+export const RPC_WS_CANDIDATES = csvEnv("POLYGON_RPC_WS_CANDIDATES", [
+  "wss://polygon-bor-rpc.publicnode.com",
+  "wss://polygon-heimdall-rpc.publicnode.com:443/websocket",
+  RPC_WS ?? "",
+  RPC_WS_FALLBACK ?? "",
+]).filter((v, i, arr) => v.length > 0 && arr.indexOf(v) === i);
 
 // ─── Wallet ──────────────────────────────────────────────────────────────────
 export function getWallet(provider: ethers.Provider): ethers.Wallet {

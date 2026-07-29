@@ -12,7 +12,7 @@
  */
 import "dotenv/config";
 import { ethers } from "ethers";
-import { RPC_HTTP, RPC_HTTP_FALLBACK, CHAIN_ID } from "./config";
+import { RPC_HTTP_CANDIDATES, CHAIN_ID } from "./config";
 import { scanAllPairs } from "./discovery/OpportunityScanner";
 import { OpportunityRanker, ArbitrageOpportunity } from "./ranking/OpportunityRanker";
 import { logger } from "./utils/logger";
@@ -24,15 +24,23 @@ const TOP_N = 10;
 
 // ─── Provider ────────────────────────────────────────────────────────────────
 
-function createProvider(): ethers.JsonRpcProvider {
-  try {
-    const p = new ethers.JsonRpcProvider(RPC_HTTP, CHAIN_ID);
-    logger.info("HTTP provider ready", { url: RPC_HTTP });
-    return p;
-  } catch {
-    logger.warn("Primary RPC failed — using fallback", { fallback: RPC_HTTP_FALLBACK });
-    return new ethers.JsonRpcProvider(RPC_HTTP_FALLBACK, CHAIN_ID);
+async function createProvider(): Promise<ethers.JsonRpcProvider> {
+  let lastErr: unknown;
+  for (const url of RPC_HTTP_CANDIDATES) {
+    try {
+      const p = new ethers.JsonRpcProvider(url, CHAIN_ID);
+      const network = await p.getNetwork();
+      if (network.chainId !== BigInt(CHAIN_ID)) {
+        throw new Error(`Endpoint ${url} is chain ${network.chainId}, expected ${CHAIN_ID}`);
+      }
+      logger.info("HTTP provider selected", { url });
+      return p;
+    } catch (err) {
+      lastErr = err;
+      logger.warn("HTTP endpoint unavailable", { url, err: String(err) });
+    }
   }
+  throw new Error(`No reachable HTTP Polygon endpoint. Last error: ${String(lastErr)}`);
 }
 
 // ─── Pretty printer ───────────────────────────────────────────────────────────
@@ -165,7 +173,7 @@ async function main(): Promise<void> {
   process.stdout.write("║  No PRIVATE_KEY required — zero on-chain transactions will be sent.  ║\n");
   process.stdout.write("╚══════════════════════════════════════════════════════════════════════╝\n\n");
 
-  const provider = createProvider();
+  const provider = await createProvider();
 
   // Verify network
   const network = await provider.getNetwork();

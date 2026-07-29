@@ -1,9 +1,8 @@
 import "dotenv/config";
 import { ethers } from "ethers";
 import {
-  RPC_HTTP,
-  RPC_HTTP_FALLBACK,
-  RPC_WS,
+  RPC_HTTP_CANDIDATES,
+  RPC_WS_CANDIDATES,
   CHAIN_ID,
 } from "./config";
 import { OpportunityScanner, PairQuotes } from "./discovery/OpportunityScanner";
@@ -14,31 +13,38 @@ import { sleep } from "./utils/helpers";
 
 // ─── Provider setup ───────────────────────────────────────────────────────────
 
-function createHttpProvider(): ethers.JsonRpcProvider {
-  try {
-    const p = new ethers.JsonRpcProvider(RPC_HTTP, CHAIN_ID);
-    logger.info("HTTP provider created", { url: RPC_HTTP });
-    return p;
-  } catch {
-    logger.warn("Primary RPC failed — using fallback", {
-      fallback: RPC_HTTP_FALLBACK,
-    });
-    return new ethers.JsonRpcProvider(RPC_HTTP_FALLBACK, CHAIN_ID);
+async function createHttpProvider(): Promise<ethers.JsonRpcProvider> {
+  let lastErr: unknown;
+  for (const url of RPC_HTTP_CANDIDATES) {
+    try {
+      const p = new ethers.JsonRpcProvider(url, CHAIN_ID);
+      const network = await p.getNetwork();
+      if (network.chainId !== BigInt(CHAIN_ID)) {
+        throw new Error(`Endpoint ${url} is chain ${network.chainId}, expected ${CHAIN_ID}`);
+      }
+      logger.info("HTTP provider selected", { url });
+      return p;
+    } catch (err) {
+      lastErr = err;
+      logger.warn("HTTP endpoint unavailable", { url, err: String(err) });
+    }
   }
+  throw new Error(`No reachable HTTP Polygon endpoint. Last error: ${String(lastErr)}`);
 }
 
-function createWsProvider(): ethers.WebSocketProvider | null {
-  if (!RPC_WS) return null;
-  try {
-    const p = new ethers.WebSocketProvider(RPC_WS, CHAIN_ID);
-    logger.info("WebSocket provider created", { url: RPC_WS });
-    return p;
-  } catch (err) {
-    logger.warn("WebSocket provider failed — will use HTTP polling", {
-      err: String(err),
-    });
-    return null;
+async function createWsProvider(): Promise<ethers.WebSocketProvider | null> {
+  for (const url of RPC_WS_CANDIDATES) {
+    try {
+      const p = new ethers.WebSocketProvider(url, CHAIN_ID);
+      const block = await p.getBlockNumber();
+      logger.info("WebSocket provider selected", { url, block });
+      return p;
+    } catch (err) {
+      logger.warn("WebSocket endpoint unavailable", { url, err: String(err) });
+    }
   }
+  logger.warn("No reachable WebSocket endpoint — will use HTTP polling");
+  return null;
 }
 
 // ─── Main loop ────────────────────────────────────────────────────────────────
@@ -46,8 +52,8 @@ function createWsProvider(): ethers.WebSocketProvider | null {
 async function main(): Promise<void> {
   logger.info("=== Polygon ARB Bot starting ===");
 
-  const httpProvider = createHttpProvider();
-  const wsProvider = createWsProvider();
+  const httpProvider = await createHttpProvider();
+  const wsProvider = await createWsProvider();
 
   // Verify network
   const network = await httpProvider.getNetwork();
