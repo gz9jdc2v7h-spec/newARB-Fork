@@ -56,7 +56,7 @@ export interface PriceStats {
   emaShort: number;
   emaLong: number;
   variance: number;
-  /** Annualised daily volatility estimate (σ per day, assuming 4-s blocks → 21600 blocks/day) */
+  /** Annualised daily volatility estimate (σ per day, assuming ~2-s Polygon blocks → 43200 blocks/day) */
   dailyVolatility: number;
   /** Momentum: EMA_short/EMA_long − 1. Positive = trending up. */
   momentum: number;
@@ -128,8 +128,8 @@ export class PairTracker {
     const emaLong = this.emaLong ?? 0;
     const momentum = emaLong > 0 ? emaShort / emaLong - 1 : 0;
 
-    // Convert per-block variance to daily (4-second Arbitrum blocks → 21600/day)
-    const blocksPerDay = 21_600;
+    // Convert per-block variance to daily (~2-second Polygon blocks → 43200/day)
+    const blocksPerDay = 43_200;
     const dailyVolatility = Math.sqrt(this.variance * blocksPerDay);
 
     // Bollinger spread threshold: spreadEma + BB_SIGMA * sqrt(spreadVar)
@@ -199,7 +199,7 @@ export class EmaTracker {
     const stats = this.getStats(tokenIn, tokenOut);
     if (!stats) return baseMinSpread;
     // Intra-block vol estimate (1-block annualised slice)
-    const blockVol = stats.dailyVolatility / Math.sqrt(21_600);
+    const blockVol = stats.dailyVolatility / Math.sqrt(43_200);
     const volBump = 2 * blockVol; // 2-sigma intra-block move
     return Math.max(baseMinSpread, stats.spreadThreshold, volBump);
   }

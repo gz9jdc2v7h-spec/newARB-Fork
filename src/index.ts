@@ -44,7 +44,7 @@ function createWsProvider(): ethers.WebSocketProvider | null {
 // ─── Main loop ────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
-  logger.info("=== ARB Bot starting ===");
+  logger.info("=== Polygon ARB Bot starting ===");
 
   const httpProvider = createHttpProvider();
   const wsProvider = createWsProvider();

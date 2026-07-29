@@ -1,7 +1,7 @@
 /**
  * DRY-RUN: 25-Cycle Discovery Runner
  *
- * Executes exactly 25 scan → rank cycles against the live Arbitrum endpoints.
+ * Executes exactly 25 scan → rank cycles against the live Polygon endpoints.
  * No wallet / PRIVATE_KEY is required. Every trade is simulated only.
  * Prints the Top-10 ranked arbitrage routes per cycle to stdout.
  *
@@ -161,7 +161,7 @@ function printFinalSummary(allRoutes: ArbitrageOpportunity[][]): void {
 async function main(): Promise<void> {
   process.stdout.write("\n");
   process.stdout.write("╔══════════════════════════════════════════════════════════════════════╗\n");
-  process.stdout.write("║  ARB-BOT  ·  DRY-RUN  ·  25-CYCLE DISCOVERY  ·  LIVE ENDPOINTS      ║\n");
+  process.stdout.write("║  POLYGON ARB-BOT  ·  DRY-RUN  ·  25-CYCLE DISCOVERY  ·  LIVE ENDPOINTS      ║\n");
   process.stdout.write("║  No PRIVATE_KEY required — zero on-chain transactions will be sent.  ║\n");
   process.stdout.write("╚══════════════════════════════════════════════════════════════════════╝\n\n");
 
