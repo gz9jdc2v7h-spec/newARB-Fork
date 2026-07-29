@@ -7,6 +7,7 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
+    "dryrun": "ts-node src/dryrun.ts",
     "lint": "eslint 'src/**/*.ts'",
     "typecheck": "tsc --noEmit"
   },
