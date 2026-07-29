@@ -1,0 +1,39 @@
+{
+  "name": "apex-tx-submitter",
+  "version": "1.0.0",
+  "description": "Controlled transaction gateway for APEX-OMEGA arbitrage engine",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "require": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "build:watch": "tsc --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "echo \"No test runner configured — add jest or vitest\" && exit 0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "http://localhost:26831/gz9jdc2v7h-spec/newARB-Fork.git"
+  },
+  "keywords": ["arbitrage", "ethereum", "ethers", "web3", "flashloan", "mev", "apex"],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "ethers": "^6.17.0"
+  },
+  "optionalDependencies": {
+    "web3": "^4.16.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.2",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
+  }
+}
