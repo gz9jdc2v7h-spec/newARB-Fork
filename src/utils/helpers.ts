@@ -69,3 +69,12 @@ export function toBigInt(amount: number, decimals: number): bigint {
 export function deadline(offsetSeconds = 120): number {
   return Math.floor(Date.now() / 1000) + offsetSeconds;
 }
+
+/**
+ * Reads an environment variable as a strictly positive integer.
+ */
+export function positiveIntEnv(key: string, fallback: number): number {
+  const parsed = parseInt(process.env[key] ?? "", 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return parsed;
+}

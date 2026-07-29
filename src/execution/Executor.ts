@@ -4,16 +4,7 @@ import { getGasData } from "../ranking/GasEstimator";
 import { withRetry, deadline } from "../utils/helpers";
 import { logger } from "../utils/logger";
 import {
-  DEXES,
-  ENABLE_MEMPOOL_REPRICING,
-  ENABLE_MULTI_HOP_EXECUTION,
-  MAX_SLIPPAGE,
-  TOKENS,
-} from "../config";
-import {
   BALANCER_VAULT_ABI,
-  CURVE_POOL_ABI,
-  ERC20_ABI,
   UNIV2_ROUTER_ABI,
   UNIV3_ROUTER_ABI,
 } from "../discovery/abis";
@@ -121,7 +112,7 @@ async function executeBalancerSwap(
   const tx: ethers.TransactionResponse = await vault.swap(
     {
       poolId,
-      kind: 0,
+      kind: 0, // GIVEN_IN
       assetIn: tokenIn,
       assetOut: tokenOut,
       amount: amountIn,
@@ -141,41 +132,9 @@ async function executeBalancerSwap(
     }
   );
 
-  logger.info("Balancer swap submitted", { hash: tx.hash });
+  logger.info("Balancer swap submitted", { hash: tx.hash, poolId });
   const receipt = await tx.wait(1);
   if (!receipt) throw new Error("No receipt for Balancer swap");
-  return receipt;
-}
-
-async function executeCurveSwap(
-  wallet: ethers.Wallet,
-  poolAddress: string,
-  i: number,
-  j: number,
-  tokenIn: string,
-  amountIn: bigint,
-  amountOutMin: bigint,
-  gasData: Awaited<ReturnType<typeof getGasData>>
-): Promise<ethers.TransactionReceipt> {
-  const pool = new ethers.Contract(poolAddress, CURVE_POOL_ABI, wallet);
-  await ensureApproval(wallet, tokenIn, poolAddress, amountIn);
-
-  let tx: ethers.TransactionResponse;
-  try {
-    tx = await pool.exchange(BigInt(i), BigInt(j), amountIn, amountOutMin, {
-      maxFeePerGas: gasData.maxFeePerGas,
-      maxPriorityFeePerGas: gasData.maxPriorityFee,
-    });
-  } catch {
-    tx = await pool.exchange(i, j, amountIn, amountOutMin, {
-      maxFeePerGas: gasData.maxFeePerGas,
-      maxPriorityFeePerGas: gasData.maxPriorityFee,
-    });
-  }
-
-  logger.info("Curve swap submitted", { hash: tx.hash });
-  const receipt = await tx.wait(1);
-  if (!receipt) throw new Error("No receipt for Curve swap");
   return receipt;
 }
 
@@ -291,8 +250,8 @@ export class Executor {
             gasData
           )
         );
-      } else if (sellDexCfg.type === "UniV3" && sellDexCfg.router) {
-        const fee = Number(sellQuote.metadata?.feeTier ?? sellDexCfg.feeTiers?.[0] ?? 3000);
+      } else if (sellDexCfg.type === "UniV3") {
+        const fee = sellQuote.poolFee ?? sellDexCfg.feeTiers?.[0] ?? 3000;
         receipt1 = await withRetry(() =>
           executeUniV3Swap(
             this.wallet,
@@ -305,14 +264,25 @@ export class Executor {
             gasData
           )
         );
-      } else if (sellDexCfg.type === "Balancer" && sellDexCfg.vault) {
-        const poolId = String(sellQuote.metadata?.poolId ?? "");
-        if (!poolId) throw new Error("Missing Balancer poolId metadata for sell leg");
+      } else {
+        if (!sellQuote.poolId || !sellDexCfg.vault) {
+          const missing = [
+            !sellQuote.poolId ? "poolId" : null,
+            !sellDexCfg.vault ? "vault address" : null,
+          ]
+            .filter((v): v is string => v !== null)
+            .join(", ");
+          throw new Error(
+            `Missing Balancer ${missing} for ${sellQuote.dex}`
+          );
+        }
+        const sellVault = sellDexCfg.vault;
+        const sellPoolId = sellQuote.poolId;
         receipt1 = await withRetry(() =>
           executeBalancerSwap(
             this.wallet,
-            sellDexCfg.vault!,
-            poolId,
+            sellVault,
+            sellPoolId,
             tokenInCfg.address,
             tokenOutCfg.address,
             tradeAmountIn,
@@ -320,27 +290,6 @@ export class Executor {
             gasData
           )
         );
-      } else if (sellDexCfg.type === "Curve") {
-        const pool = String(sellQuote.metadata?.pool ?? "");
-        const i = Number(sellQuote.metadata?.i ?? -1);
-        const j = Number(sellQuote.metadata?.j ?? -1);
-        if (!pool || i < 0 || j < 0) {
-          throw new Error("Missing Curve pool metadata for sell leg");
-        }
-        receipt1 = await withRetry(() =>
-          executeCurveSwap(
-            this.wallet,
-            pool,
-            i,
-            j,
-            tokenInCfg.address,
-            tradeAmountIn,
-            minOut1,
-            gasData
-          )
-        );
-      } else {
-        throw new Error(`Unsupported sell DEX type: ${sellDexCfg.type}`);
       }
 
       this.repricer?.registerSubmission(label, receipt1.hash);
@@ -376,8 +325,8 @@ export class Executor {
             gasData
           )
         );
-      } else if (buyDexCfg.type === "UniV3" && buyDexCfg.router) {
-        const fee = Number(buyQuote.metadata?.feeTier ?? buyDexCfg.feeTiers?.[0] ?? 3000);
+      } else if (buyDexCfg.type === "UniV3") {
+        const fee = buyQuote.poolFee ?? buyDexCfg.feeTiers?.[0] ?? 3000;
         receipt2 = await withRetry(() =>
           executeUniV3Swap(
             this.wallet,
@@ -390,14 +339,25 @@ export class Executor {
             gasData
           )
         );
-      } else if (buyDexCfg.type === "Balancer" && buyDexCfg.vault) {
-        const poolId = String(buyQuote.metadata?.poolId ?? "");
-        if (!poolId) throw new Error("Missing Balancer poolId metadata for buy leg");
+      } else {
+        if (!buyQuote.poolId || !buyDexCfg.vault) {
+          const missing = [
+            !buyQuote.poolId ? "poolId" : null,
+            !buyDexCfg.vault ? "vault address" : null,
+          ]
+            .filter((v): v is string => v !== null)
+            .join(", ");
+          throw new Error(
+            `Missing Balancer ${missing} for ${buyQuote.dex}`
+          );
+        }
+        const buyVault = buyDexCfg.vault;
+        const buyPoolId = buyQuote.poolId;
         receipt2 = await withRetry(() =>
           executeBalancerSwap(
             this.wallet,
-            buyDexCfg.vault!,
-            poolId,
+            buyVault,
+            buyPoolId,
             tokenOutCfg.address,
             tokenInCfg.address,
             actualOut1,
@@ -405,27 +365,6 @@ export class Executor {
             gasData
           )
         );
-      } else if (buyDexCfg.type === "Curve") {
-        const pool = String(buyQuote.metadata?.pool ?? "");
-        const i = Number(buyQuote.metadata?.j ?? -1);
-        const j = Number(buyQuote.metadata?.i ?? -1);
-        if (!pool || i < 0 || j < 0) {
-          throw new Error("Missing Curve pool metadata for buy leg");
-        }
-        receipt2 = await withRetry(() =>
-          executeCurveSwap(
-            this.wallet,
-            pool,
-            i,
-            j,
-            tokenOutCfg.address,
-            actualOut1,
-            minOut2,
-            gasData
-          )
-        );
-      } else {
-        throw new Error(`Unsupported buy DEX type: ${buyDexCfg.type}`);
       }
 
       logger.info("Leg 2 confirmed", { hash: receipt2.hash, gas: receipt2.gasUsed.toString() });

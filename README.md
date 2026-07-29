@@ -61,27 +61,20 @@ What it does **not** honestly prove by itself is guaranteed future profit. Profi
 
 ```text
 src/
-├── adapters/      ethers v6 / web3 transaction adapters
-├── config/        chain, RPC, token, DEX, and execution parameters
-├── discovery/     quote acquisition and scan orchestration
-├── execution/     live two-leg trade execution
-├── math/          CFMM math, Bellman-Ford, Kelly, EMA, portfolio selection
-├── nonce/         nonce coordination
-├── pipeline/      C1/C2 execution, transparency, evidence hooks
-├── ranking/       gas estimation and opportunity ranking
-├── receipt/       receipt normalization
-├── relay/         private relay submission path
-├── submitter/     controlled transaction submission gateway
-├── types/         shared interfaces
-├── utils/         logging and helpers
-├── dryrun.ts      25-cycle live-endpoint discovery/ranking runner
-└── index.ts       main runtime bootstrap
-
-python/
-└── tests/         scanner + math validation suite
-
-rust/
-└── crates/        scanner/ranking/validator support crates and PyO3 wrapper
+├── config/         – Network config, token list, DEX addresses, env vars
+├── discovery/
+│   ├── abis.ts             – Minimal ABIs for UniV2, UniV3, Balancer, Aave
+│   ├── PriceFeeder.ts      – Per-DEX quote fetchers (UniV2 reserve math, UniV3 QuoterV2, Balancer Vault)
+│   └── OpportunityScanner.ts – Parallel pair scanner + WebSocket/HTTP-poll event loop
+├── ranking/
+│   ├── GasEstimator.ts     – EIP-1559 gas data with 1-second cache
+│   └── OpportunityRanker.ts – Profit scoring with slippage & gas deduction
+├── execution/
+│   └── Executor.ts         – Two-leg sequential swap, ERC-20 approval, circuit breaker
+├── utils/
+│   ├── logger.ts           – Structured ISO-timestamp logger
+│   └── helpers.ts          – pLimit, withRetry, sleep, unit conversions
+└── index.ts        – Bootstrap: provider, scanner, ranker, executor
 ```
 
 ---
@@ -550,34 +543,33 @@ python -m pytest python/tests/test_scanner.py
 
 | Variable | Default / status | Role |
 |---|---|---|
-| `POLYGON_RPC_HTTP` | `https://polygon-rpc.com` | primary HTTP RPC |
-| `POLYGON_RPC_HTTP_FALLBACK` | `https://polygon-bor-rpc.publicnode.com` | fallback HTTP RPC |
-| `POLYGON_RPC_WS` | optional | preferred WebSocket RPC |
-| `POLYGON_RPC_WS_FALLBACK` | optional | fallback WebSocket RPC |
-| `POLYGON_RPC_HTTP_CANDIDATES` | built-in list | HTTP endpoint probe sequence |
-| `POLYGON_RPC_WS_CANDIDATES` | built-in list | WebSocket endpoint probe sequence |
-| `PRIVATE_KEY` | none | enables live execution |
-| `MIN_PROFIT_USD` | `5.0` | minimum net-profit gate |
-| `MAX_GAS_PRICE_GWEI` | `2.0` | gas ceiling |
-| `MAX_SLIPPAGE` | `0.005` | slippage tolerance |
-| `DISCOVERY_WORKERS` | `8` | bounded scan concurrency |
-| `POLL_INTERVAL_MS` | `500` | polling interval when needed |
-| `LOG_LEVEL` | `info` | runtime log verbosity |
-| `AAVE_POOL` | Polygon Aave pool address | flash-loan path configuration |
-
-The config layer also accepts legacy `ARB_*` RPC aliases for HTTP/WS compatibility paths.
+| `POLYGON_RPC_HTTP` | `https://polygon-rpc.com` | Primary HTTP endpoint |
+| `POLYGON_RPC_HTTP_FALLBACK` | `https://polygon-bor-rpc.publicnode.com` | Fallback HTTP endpoint |
+| `POLYGON_RPC_WS` | `wss://polygon-bor-rpc.publicnode.com` | Primary WebSocket endpoint |
+| `POLYGON_RPC_WS_FALLBACK` | `wss://polygon-heimdall-rpc.publicnode.com:443/websocket` | Approved WebSocket fallback |
+| `POLYGON_RPC_HTTP_CANDIDATES` | `polygon-bor-rpc.publicnode.com, polygon-rpc.com, rpc.ankr.com/polygon, polygon.llamarpc.com` | Comma-separated HTTP probe list |
+| `POLYGON_RPC_WS_CANDIDATES` | `polygon-bor-rpc.publicnode.com, polygon-heimdall-rpc.publicnode.com:443/websocket` | Comma-separated WS probe list |
+| `PRIVATE_KEY` | _(none)_ | Executor wallet — omit for dry-run |
+| `MIN_PROFIT_USD` | `5.0` | Minimum net profit to execute (USD) |
+| `MAX_GAS_PRICE_GWEI` | `2.0` | Maximum gas price willing to pay (Gwei) |
+| `MAX_SLIPPAGE` | `0.005` | Slippage tolerance (0.5 %) |
+| `DISCOVERY_WORKERS` | `8` | Parallel RPC workers for price scanning |
+| `POLL_INTERVAL_MS` | `500` | HTTP poll interval (ms) when WebSocket unavailable |
+| `BALANCER_DISCOVERY_FROM_BLOCK` | `1` | Start block for Balancer on-chain pool discovery scan |
+| `BALANCER_DISCOVERY_STEP` | `200000` | Block range size per Balancer log query chunk |
+| `BALANCER_DISCOVERY_CONCURRENCY` | `16` | Parallel Balancer pool-token lookups |
+| `LOG_LEVEL` | `info` | Logging verbosity (`debug` / `info` / `warn` / `error`) |
 
 ---
 
 ## Security and operating notes
 
-- Never commit `.env` or private keys.
-- Use a dedicated low-balance wallet for live execution.
-- Validate live routes on a fork before trusting mainnet capital.
-- Treat projected net profit as a model output until settlement proves it.
-- Review receipt logs and evidence records for every executed route.
-- Keep gas caps conservative; fake edge disappears quickly when gas expands.
-- Respect the circuit breaker instead of force-running through repeated failures.
+| DEX | Type | Notes |
+|---|---|---|
+| Uniswap V3 | UniV3 | Fee tiers: 0.01 %, 0.05 %, 0.3 %, 1 % |
+| SushiSwap V2 | UniV2 | 0.3 % fee |
+| QuickSwap V2 | UniV2 | 0.3 % fee |
+| Balancer V2 | Balancer | Vault-based (on-chain pool discovery + quote/swap support) |
 
 ---
 

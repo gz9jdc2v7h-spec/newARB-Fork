@@ -1,17 +1,8 @@
 import { ethers } from "ethers";
-import {
-  BALANCER_POOLS,
-  CURVE_POOLS,
-  DEXES,
-  DexConfig,
-  ENABLE_BALANCER_QUOTES,
-  ENABLE_CURVE_QUOTES,
-  TOKENS,
-} from "../config";
-import { withRetry, toFloat } from "../utils/helpers";
+import { DexConfig, TOKENS } from "../config";
+import { pLimit, positiveIntEnv, withRetry, toFloat } from "../utils/helpers";
 import {
   BALANCER_VAULT_ABI,
-  CURVE_POOL_ABI,
   UNIV2_FACTORY_ABI,
   UNIV2_PAIR_ABI,
   UNIV3_QUOTER_V2_ABI,
@@ -37,20 +28,129 @@ export interface PriceQuote {
   reserveOut?: bigint;
   /** Pool fee in basis points (e.g. 30 for 0.3 %). */
   feeBps?: number;
-  /** Optional metadata used by execution/routing paths. */
-  metadata?: Record<string, string | number | boolean>;
+  /** UniV3 fee tier used by the quote (e.g. 500/3000/10000). */
+  poolFee?: number;
+  /** Balancer pool id used by the quote. */
+  poolId?: string;
 }
 
 // How many WETH (18 dec) we price-check by default
 const DEFAULT_AMOUNT_IN_WETH = ethers.parseEther("1");
-const BALANCER_POOL_TTL_MS = 5 * 60_000;
-const balancerPoolTokensCache = new Map<string, { tokens: string[]; cachedAtMs: number }>();
+const BALANCER_POOL_REGISTERED_TOPIC = ethers.id(
+  "PoolRegistered(bytes32,address,uint8)"
+);
+const BALANCER_SWAP_GAS_ESTIMATE = 170_000n;
+
+const BALANCER_DISCOVERY_FROM_BLOCK = positiveIntEnv(
+  "BALANCER_DISCOVERY_FROM_BLOCK",
+  1
+);
+const BALANCER_DISCOVERY_STEP = positiveIntEnv(
+  "BALANCER_DISCOVERY_STEP",
+  200000
+);
+const BALANCER_DISCOVERY_CONCURRENCY = positiveIntEnv(
+  "BALANCER_DISCOVERY_CONCURRENCY",
+  16
+);
+
+const balancerPairPoolCache = new Map<string, Promise<string[]>>();
+const balancerPoolTokensCache = new Map<string, Promise<string[]>>();
 
 /** Maps symbol → token config */
 function token(symbol: string) {
   const t = TOKENS[symbol];
   if (!t) throw new Error(`Unknown token: ${symbol}`);
   return t;
+}
+
+function canonicalPairKey(tokenA: string, tokenB: string): string {
+  const a = tokenA.toLowerCase();
+  const b = tokenB.toLowerCase();
+  return a < b ? `${a}:${b}` : `${b}:${a}`;
+}
+
+function balancerPairCacheKey(vault: string, tokenA: string, tokenB: string): string {
+  return `${vault.toLowerCase()}:${canonicalPairKey(tokenA, tokenB)}`;
+}
+
+async function getBalancerPoolTokens(
+  provider: ethers.Provider,
+  vault: string,
+  poolId: string
+): Promise<string[]> {
+  const cacheKey = `${vault.toLowerCase()}:${poolId.toLowerCase()}`;
+  const cached = balancerPoolTokensCache.get(cacheKey);
+  if (cached) return cached;
+
+  const task = (async () => {
+    const vaultContract = new ethers.Contract(vault, BALANCER_VAULT_ABI, provider);
+    const [tokens]: [string[], bigint[], bigint] = await withRetry(() =>
+      vaultContract.getPoolTokens(poolId)
+    );
+    return tokens.map((t) => t.toLowerCase());
+  })();
+
+  balancerPoolTokensCache.set(cacheKey, task);
+  return task;
+}
+
+async function discoverBalancerPoolsForPair(
+  provider: ethers.Provider,
+  vault: string,
+  tokenInAddress: string,
+  tokenOutAddress: string
+): Promise<string[]> {
+  const cacheKey = balancerPairCacheKey(vault, tokenInAddress, tokenOutAddress);
+  const cached = balancerPairPoolCache.get(cacheKey);
+  if (cached) return cached;
+
+  const task = (async () => {
+    const latestBlock = await provider.getBlockNumber();
+    const poolIds = new Set<string>();
+
+    for (let fromBlock = BALANCER_DISCOVERY_FROM_BLOCK; fromBlock <= latestBlock; ) {
+      const toBlock = Math.min(fromBlock + BALANCER_DISCOVERY_STEP - 1, latestBlock);
+      const logs = await withRetry(() =>
+        provider.getLogs({
+          address: vault,
+          fromBlock,
+          toBlock,
+          topics: [BALANCER_POOL_REGISTERED_TOPIC],
+        })
+      );
+      for (const log of logs) {
+        const poolId = log.topics[1];
+        if (poolId) poolIds.add(poolId);
+      }
+      fromBlock = toBlock + 1;
+    }
+
+    if (poolIds.size === 0) return [];
+
+    const tokenA = tokenInAddress.toLowerCase();
+    const tokenB = tokenOutAddress.toLowerCase();
+    const poolIdList = Array.from(poolIds);
+    const matches = await pLimit(
+      poolIdList.map(
+        (poolId) =>
+          async (): Promise<string | null> => {
+            try {
+              const tokens = await getBalancerPoolTokens(provider, vault, poolId);
+              return tokens.includes(tokenA) && tokens.includes(tokenB) ? poolId : null;
+            } catch {
+              return null;
+            }
+          }
+      ),
+      BALANCER_DISCOVERY_CONCURRENCY
+    );
+
+    return matches.filter((poolId): poolId is string => poolId !== null);
+  })();
+
+  balancerPairPoolCache.set(cacheKey, task);
+  return task;
 }
 
 // ─── UniV2 quote ─────────────────────────────────────────────────────────────
@@ -159,7 +259,7 @@ async function quoteUniV3(
           price,
           gasEstimate,
           timestamp: Date.now(),
-          metadata: { feeTier: fee },
+          poolFee: fee,
         };
       }
     } catch {
@@ -170,24 +270,7 @@ async function quoteUniV3(
   return best;
 }
 
-async function getBalancerPoolTokens(
-  provider: ethers.Provider,
-  vaultAddress: string,
-  poolId: string
-): Promise<string[]> {
-  const cached = balancerPoolTokensCache.get(poolId);
-  if (cached && Date.now() - cached.cachedAtMs < BALANCER_POOL_TTL_MS) {
-    return cached.tokens;
-  }
-
-  const vault = new ethers.Contract(vaultAddress, BALANCER_VAULT_ABI, provider);
-  const [tokens]: [string[], bigint[], bigint] = await withRetry(() =>
-    vault.getPoolTokens(poolId)
-  );
-
-  balancerPoolTokensCache.set(poolId, { tokens, cachedAtMs: Date.now() });
-  return tokens;
-}
+// ─── Balancer quote ───────────────────────────────────────────────────────────
 
 async function quoteBalancer(
   provider: ethers.Provider,
@@ -196,52 +279,50 @@ async function quoteBalancer(
   tokenOutSym: string,
   amountIn: bigint
 ): Promise<PriceQuote | null> {
-  if (!ENABLE_BALANCER_QUOTES || !dex.vault) return null;
+  if (!dex.vault) return null;
 
   const tokenIn = token(tokenInSym);
   const tokenOut = token(tokenOutSym);
   const vault = new ethers.Contract(dex.vault, BALANCER_VAULT_ABI, provider);
-  const candidates = BALANCER_POOLS.filter(
-    (pool) =>
-      (pool.tokenIn === tokenInSym && pool.tokenOut === tokenOutSym) ||
-      (pool.tokenIn === tokenOutSym && pool.tokenOut === tokenInSym)
+  const candidatePools = await discoverBalancerPoolsForPair(
+    provider,
+    dex.vault,
+    tokenIn.address,
+    tokenOut.address
   );
+  if (candidatePools.length === 0) return null;
 
   let best: PriceQuote | null = null;
-  for (const pool of candidates) {
+
+  for (const poolId of candidatePools) {
     try {
-      const poolTokens = await getBalancerPoolTokens(provider, dex.vault, pool.poolId);
-      const inIdx = poolTokens.findIndex(
-        (t) => t.toLowerCase() === tokenIn.address.toLowerCase()
-      );
-      const outIdx = poolTokens.findIndex(
-        (t) => t.toLowerCase() === tokenOut.address.toLowerCase()
-      );
-      if (inIdx < 0 || outIdx < 0) continue;
-
-      const steps = [
-        {
-          poolId: pool.poolId,
-          assetInIndex: 0,
-          assetOutIndex: 1,
-          amount: amountIn,
-          userData: "0x",
-        },
-      ];
-      const assets = [tokenIn.address, tokenOut.address];
-      const funds = {
-        sender: ethers.ZeroAddress,
-        fromInternalBalance: false,
-        recipient: ethers.ZeroAddress,
-        toInternalBalance: false,
-      };
-
       const deltas: bigint[] = await withRetry(() =>
-        vault.queryBatchSwap.staticCall(0, steps, assets, funds)
+        vault.queryBatchSwap.staticCall(
+          0, // GIVEN_IN
+          [
+            {
+              poolId,
+              assetInIndex: 0n,
+              assetOutIndex: 1n,
+              amount: amountIn,
+              userData: "0x",
+            },
+          ],
+          [tokenIn.address, tokenOut.address],
+          {
+            sender: ethers.ZeroAddress,
+            fromInternalBalance: false,
+            recipient: ethers.ZeroAddress,
+            toInternalBalance: false,
+          }
+        )
       );
-      const outDelta = deltas[1];
-      const amountOut = outDelta < 0n ? -outDelta : 0n;
-      if (amountOut === 0n) continue;
+
+      if (deltas.length < 2) continue;
+      // Balancer queryBatchSwap returns signed vault deltas:
+      // negative delta on assetOut means tokens leave the vault to the trader.
+      const amountOut = -deltas[1];
+      if (amountOut <= 0n) continue;
 
       const price =
         toFloat(amountOut, tokenOut.decimals) /
@@ -250,81 +331,18 @@ async function quoteBalancer(
       if (!best || amountOut > best.amountOut) {
         best = {
           dex: dex.name,
-          invariantFamily: "Weighted",
-          quoteSource: "quoter",
           tokenIn: tokenInSym,
           tokenOut: tokenOutSym,
           amountIn,
           amountOut,
           price,
-          gasEstimate: 170_000n,
+          gasEstimate: BALANCER_SWAP_GAS_ESTIMATE,
           timestamp: Date.now(),
-          feeBps: pool.swapFeeBps,
-          metadata: {
-            poolId: pool.poolId,
-            cacheHit: balancerPoolTokensCache.has(pool.poolId),
-          },
+          poolId,
         };
       }
     } catch {
-      // ignore bad pool candidates and keep scanning
-    }
-  }
-
-  return best;
-}
-
-async function quoteCurve(
-  provider: ethers.Provider,
-  tokenInSym: string,
-  tokenOutSym: string,
-  amountIn: bigint
-): Promise<PriceQuote | null> {
-  if (!ENABLE_CURVE_QUOTES) return null;
-
-  const tokenIn = token(tokenInSym);
-  const tokenOut = token(tokenOutSym);
-
-  let best: PriceQuote | null = null;
-  for (const pool of CURVE_POOLS) {
-    const i = pool.tokenSymbols.findIndex((s) => s === tokenInSym);
-    const j = pool.tokenSymbols.findIndex((s) => s === tokenOutSym);
-    if (i < 0 || j < 0 || i === j) continue;
-
-    const curve = new ethers.Contract(pool.pool, CURVE_POOL_ABI, provider);
-    try {
-      let amountOut = 0n;
-      try {
-        amountOut = await withRetry(() => curve.get_dy(BigInt(i), BigInt(j), amountIn));
-      } catch {
-        amountOut = await withRetry(() => curve.get_dy(i, j, amountIn));
-      }
-      if (amountOut === 0n) continue;
-
-      const price =
-        toFloat(amountOut, tokenOut.decimals) /
-        toFloat(amountIn, tokenIn.decimals);
-      if (!best || amountOut > best.amountOut) {
-        best = {
-          dex: "Curve",
-          invariantFamily: "ConstantProduct",
-          quoteSource: "quoter",
-          tokenIn: tokenInSym,
-          tokenOut: tokenOutSym,
-          amountIn,
-          amountOut,
-          price,
-          gasEstimate: 190_000n,
-          timestamp: Date.now(),
-          metadata: {
-            pool: pool.pool,
-            i,
-            j,
-          },
-        };
-      }
-    } catch {
-      // this pool does not support the pair/index shape
+      // Pool may reject this path/amount — skip
     }
   }
 
@@ -356,13 +374,7 @@ export async function fetchQuote(
   if (dex.type === "UniV3") {
     return quoteUniV3(provider, dex, tokenInSym, tokenOutSym, _amountIn);
   }
-  if (dex.type === "Balancer") {
-    return quoteBalancer(provider, dex, tokenInSym, tokenOutSym, _amountIn);
-  }
-  if (dex.type === "Curve") {
-    return quoteCurve(provider, tokenInSym, tokenOutSym, _amountIn);
-  }
-  return null;
+  return quoteBalancer(provider, dex, tokenInSym, tokenOutSym, _amountIn);
 }
 
 export function isDexEnabled(name: string): boolean {
