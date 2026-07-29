@@ -248,7 +248,7 @@ export class C2Engine {
         reason: 'NET_PROFIT_BELOW_MINIMUM',
         configVersion: req.config.configVersion,
         stateHash: postC1StateHash,
-        routeHash: c2RouteHash,
+        routeHash: c2RouteHash ?? '0x0',
         detail: 'C2 decision: NO_OP — no profitable continuation found',
         timestamp: Date.now(),
       });
@@ -365,14 +365,15 @@ export function selectC2Decision(
 ): { decision: C2Decision; selectedCandidate?: C2Candidate } {
   const mirrorNet = parseProfit(mirrorCandidate?.netProfitUsd);
   const reverseNet = parseProfit(reverseCandidate?.netProfitUsd);
-  const mirrorValid = !!mirrorCandidate?.allGatesPassed;
-  const reverseValid = !!reverseCandidate?.allGatesPassed;
+  const mirrorValid = !!mirrorCandidate?.allGatesPassed && mirrorNet !== null;
+  const reverseValid = !!reverseCandidate?.allGatesPassed && reverseNet !== null;
 
   if (
     mirrorCandidate &&
     mirrorValid &&
+    mirrorNet !== null &&
     mirrorNet >= minNetProfitUsd &&
-    mirrorNet >= reverseNet
+    mirrorNet >= (reverseNet ?? Number.NEGATIVE_INFINITY)
   ) {
     return { decision: 'MIRROR', selectedCandidate: mirrorCandidate };
   }
@@ -380,8 +381,9 @@ export function selectC2Decision(
   if (
     reverseCandidate &&
     reverseValid &&
+    reverseNet !== null &&
     reverseNet >= minNetProfitUsd &&
-    reverseNet > mirrorNet
+    reverseNet > (mirrorNet ?? Number.NEGATIVE_INFINITY)
   ) {
     return { decision: 'REVERSE', selectedCandidate: reverseCandidate };
   }
@@ -389,10 +391,10 @@ export function selectC2Decision(
   return { decision: 'NO_OP' };
 }
 
-function parseProfit(value: string | undefined): number {
-  if (!value) return Number.NEGATIVE_INFINITY;
+function parseProfit(value: string | undefined): number | null {
+  if (!value) return null;
   const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function hasDynamicReuse(guard: C2ReuseGuard | undefined): boolean {
