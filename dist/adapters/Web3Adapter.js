@@ -53,6 +53,7 @@ async function getWeb3() {
         return web3Module;
     try {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        // @ts-ignore -- web3 is optional; if not installed, catch() raises a clear error
         web3Module = await Promise.resolve().then(() => __importStar(require('web3')));
         return web3Module;
     }

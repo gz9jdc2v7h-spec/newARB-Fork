@@ -45,6 +45,7 @@ async function getWeb3(): Promise<{ Web3: new (rpc: string) => Web3Provider }> {
   if (web3Module) return web3Module;
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    // @ts-ignore -- web3 is optional; if not installed, catch() raises a clear error
     web3Module = await import('web3') as any;
     return web3Module!;
   } catch {

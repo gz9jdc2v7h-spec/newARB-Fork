@@ -147,13 +147,31 @@ class C2Engine {
                 reason: 'NET_PROFIT_BELOW_MINIMUM',
                 configVersion: req.config.configVersion,
                 stateHash: postC1StateHash,
-                routeHash: c2RouteHash,
+                routeHash: c2RouteHash ?? '0x0',
                 detail: 'C2 decision: NO_OP — no profitable continuation found',
                 timestamp: Date.now(),
             });
             return {
                 cycleId: req.cycleId,
                 decision: 'NO_OP',
+                skipped: true,
+                evidenceChain: chain,
+            };
+        }
+        if (!c2RouteHash) {
+            this.logger.logRejection({
+                opportunityId: req.opportunityId,
+                stage: 'SUBMISSION',
+                status: 'REJECTED',
+                reason: 'PAYLOAD_ABI_MISMATCH',
+                configVersion: req.config.configVersion,
+                stateHash: postC1StateHash,
+                detail: 'Selected candidate missing route hash',
+                timestamp: Date.now(),
+            });
+            return {
+                cycleId: req.cycleId,
+                decision,
                 skipped: true,
                 evidenceChain: chain,
             };
@@ -234,27 +252,29 @@ exports.C2Engine = C2Engine;
 function selectC2Decision(mirrorCandidate, reverseCandidate, minNetProfitUsd) {
     const mirrorNet = parseProfit(mirrorCandidate?.netProfitUsd);
     const reverseNet = parseProfit(reverseCandidate?.netProfitUsd);
-    const mirrorValid = !!mirrorCandidate?.allGatesPassed;
-    const reverseValid = !!reverseCandidate?.allGatesPassed;
+    const mirrorValid = !!mirrorCandidate?.allGatesPassed && mirrorNet !== null;
+    const reverseValid = !!reverseCandidate?.allGatesPassed && reverseNet !== null;
     if (mirrorCandidate &&
         mirrorValid &&
+        mirrorNet !== null &&
         mirrorNet >= minNetProfitUsd &&
-        mirrorNet >= reverseNet) {
+        mirrorNet >= (reverseNet ?? Number.NEGATIVE_INFINITY)) {
         return { decision: 'MIRROR', selectedCandidate: mirrorCandidate };
     }
     if (reverseCandidate &&
         reverseValid &&
+        reverseNet !== null &&
         reverseNet >= minNetProfitUsd &&
-        reverseNet > mirrorNet) {
+        reverseNet > (mirrorNet ?? Number.NEGATIVE_INFINITY)) {
         return { decision: 'REVERSE', selectedCandidate: reverseCandidate };
     }
     return { decision: 'NO_OP' };
 }
 function parseProfit(value) {
     if (!value)
-        return Number.NEGATIVE_INFINITY;
+        return null;
     const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
+    return Number.isFinite(parsed) ? parsed : null;
 }
 function hasDynamicReuse(guard) {
     if (!guard)
