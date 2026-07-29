@@ -1,4 +1,3 @@
-"use strict";
 /**
  * AuditLogger — writes immutable stage evidence to any sink that implements
  * the LogSink interface (console, file, DB, event-bus, etc.).
@@ -12,12 +11,9 @@
  *  - Every rejection is logged with the same severity as a win.
  *  - Estimated / Simulated / Realized PnL are never mixed in the same record.
  */
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.AuditLogger = exports.MultiSink = exports.ConsoleSink = void 0;
-exports.buildMinimumEvidence = buildMinimumEvidence;
-const ethers_1 = require("ethers");
+import { keccak256, toUtf8Bytes } from 'ethers';
 // ── Console sink (default) ────────────────────────────────────────────────────
-class ConsoleSink {
+export class ConsoleSink {
     write(entry) {
         const line = JSON.stringify({
             t: entry.timestamp,
@@ -29,9 +25,8 @@ class ConsoleSink {
         process.stdout.write(line + '\n');
     }
 }
-exports.ConsoleSink = ConsoleSink;
 // ── Multi-sink (fan-out) ──────────────────────────────────────────────────────
-class MultiSink {
+export class MultiSink {
     sinks;
     constructor(sinks) {
         this.sinks = sinks;
@@ -40,9 +35,8 @@ class MultiSink {
         await Promise.all(this.sinks.map((s) => s.write(entry)));
     }
 }
-exports.MultiSink = MultiSink;
 // ── AuditLogger ───────────────────────────────────────────────────────────────
-class AuditLogger {
+export class AuditLogger {
     sink;
     constructor(sink) {
         this.sink = sink ?? new ConsoleSink();
@@ -101,16 +95,15 @@ class AuditLogger {
         void this.sink.write(entry);
     }
 }
-exports.AuditLogger = AuditLogger;
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function hashRecord(record) {
-    return (0, ethers_1.keccak256)((0, ethers_1.toUtf8Bytes)(JSON.stringify(record)));
+    return keccak256(toUtf8Bytes(JSON.stringify(record)));
 }
 /**
  * Builds the minimum evidence record required by the ledger invariant.
  * All hash fields are required; missing values default to '0x0'.
  */
-function buildMinimumEvidence(chain) {
+export function buildMinimumEvidence(chain) {
     return {
         opportunity_id: chain.opportunityId,
         config_version: chain.configVersion ?? 0,

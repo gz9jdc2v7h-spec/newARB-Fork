@@ -1,4 +1,3 @@
-"use strict";
 /**
  * NonceManager — central nonce authority for all wallet addresses.
  *
@@ -9,10 +8,8 @@
  *  - On-chain sync on first use and after any confirmed receipt.
  *  - Manual override for recovery scenarios.
  */
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.NonceManager = void 0;
 const MAX_LANES = 32;
-class NonceManager {
+export class NonceManager {
     provider;
     locks = new Map();
     constructor(provider) {
@@ -96,5 +93,4 @@ class NonceManager {
         }
     }
 }
-exports.NonceManager = NonceManager;
 //# sourceMappingURL=NonceManager.js.map

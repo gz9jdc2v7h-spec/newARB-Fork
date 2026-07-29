@@ -1,4 +1,3 @@
-"use strict";
 /**
  * ApexTxSubmitter — the single controlled transaction gateway.
  *
@@ -13,14 +12,12 @@
  *
  * Every call path emits a LedgerRecord via the AuditLogger.
  */
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.ApexTxSubmitter = void 0;
-const ethers_1 = require("ethers");
-const NonceManager_js_1 = require("../nonce/NonceManager.js");
-const EthersV6Adapter_js_1 = require("../adapters/EthersV6Adapter.js");
-const PrivateRelaySubmitter_js_1 = require("../relay/PrivateRelaySubmitter.js");
-const AuditLogger_js_1 = require("../pipeline/transparency/AuditLogger.js");
-class ApexTxSubmitter {
+import { JsonRpcProvider } from 'ethers';
+import { NonceManager } from '../nonce/NonceManager.js';
+import { EthersV6Adapter } from '../adapters/EthersV6Adapter.js';
+import { PrivateRelaySubmitter } from '../relay/PrivateRelaySubmitter.js';
+import { AuditLogger } from '../pipeline/transparency/AuditLogger.js';
+export class ApexTxSubmitter {
     provider;
     nonceManager;
     ethersAdapter;
@@ -28,11 +25,11 @@ class ApexTxSubmitter {
     logger;
     receiptTimeoutMs;
     constructor(config) {
-        this.provider = new ethers_1.JsonRpcProvider(config.rpcUrl);
-        this.nonceManager = new NonceManager_js_1.NonceManager(this.provider);
+        this.provider = new JsonRpcProvider(config.rpcUrl);
+        this.nonceManager = new NonceManager(this.provider);
         this.receiptTimeoutMs = config.receiptTimeoutMs ?? 120_000;
-        this.logger = config.logger ?? new AuditLogger_js_1.AuditLogger();
-        this.ethersAdapter = new EthersV6Adapter_js_1.EthersV6Adapter({
+        this.logger = config.logger ?? new AuditLogger();
+        this.ethersAdapter = new EthersV6Adapter({
             provider: this.provider,
             nonceManager: this.nonceManager,
             chainId: config.chainId,
@@ -40,7 +37,7 @@ class ApexTxSubmitter {
             receiptTimeoutMs: config.receiptTimeoutMs,
         });
         if (config.relay) {
-            this.relaySubmitter = new PrivateRelaySubmitter_js_1.PrivateRelaySubmitter({
+            this.relaySubmitter = new PrivateRelaySubmitter({
                 endpoint: config.relay.endpoint,
                 relayName: config.relay.relayName,
                 authHeader: config.relay.authHeader,
@@ -145,5 +142,4 @@ class ApexTxSubmitter {
         };
     }
 }
-exports.ApexTxSubmitter = ApexTxSubmitter;
 //# sourceMappingURL=ApexTxSubmitter.js.map

@@ -1,4 +1,3 @@
-"use strict";
 /**
  * EthersV6Adapter — primary signing and submission adapter using ethers v6.
  *
@@ -8,11 +7,9 @@
  *  - Submit directly to an RPC provider (public path, disabled by default).
  *  - Wait for and normalize the receipt.
  */
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.EthersV6Adapter = void 0;
-const ethers_1 = require("ethers");
-const ReceiptNormalizer_js_1 = require("../receipt/ReceiptNormalizer.js");
-class EthersV6Adapter {
+import { Wallet, Transaction, keccak256, } from 'ethers';
+import { ReceiptNormalizer } from '../receipt/ReceiptNormalizer.js';
+export class EthersV6Adapter {
     provider;
     nonceManager;
     chainId;
@@ -39,11 +36,11 @@ class EthersV6Adapter {
     }
     // ── Sign ────────────────────────────────────────────────────────────────────
     async sign(request) {
-        const wallet = new ethers_1.Wallet(request.signerPrivateKey);
+        const wallet = new Wallet(request.signerPrivateKey);
         const signerAddress = wallet.address;
         const nonce = request.nonce ??
             (await this.nonceManager.acquire(request.chainId, signerAddress));
-        const tx = ethers_1.Transaction.from({
+        const tx = Transaction.from({
             type: 2, // EIP-1559
             chainId: BigInt(request.chainId),
             nonce,
@@ -91,7 +88,7 @@ class EthersV6Adapter {
                 submittedBlock: currentBlock,
                 expiresAtBlock: request.expiresAtBlock,
                 txHash: sentTx.hash,
-                rawTxHash: (0, ethers_1.keccak256)(signed.rawTx),
+                rawTxHash: keccak256(signed.rawTx),
                 payloadHash: request.payloadHash,
                 routeHash: request.routeHash,
                 stateHash: request.stateHash,
@@ -110,7 +107,7 @@ class EthersV6Adapter {
         while (Date.now() < deadline) {
             const raw = await this.provider.getTransactionReceipt(txHash);
             if (raw) {
-                return ReceiptNormalizer_js_1.ReceiptNormalizer.fromEthers(raw);
+                return ReceiptNormalizer.fromEthers(raw);
             }
             await sleep(this.pollIntervalMs);
         }
@@ -130,7 +127,7 @@ class EthersV6Adapter {
             submittedBlock: 0,
             expiresAtBlock: request.expiresAtBlock,
             txHash: '',
-            rawTxHash: (0, ethers_1.keccak256)(signed.rawTx),
+            rawTxHash: keccak256(signed.rawTx),
             payloadHash: request.payloadHash,
             routeHash: request.routeHash,
             stateHash: request.stateHash,
@@ -141,7 +138,6 @@ class EthersV6Adapter {
         };
     }
 }
-exports.EthersV6Adapter = EthersV6Adapter;
 function sleep(ms) {
     return new Promise((r) => setTimeout(r, ms));
 }

@@ -1,4 +1,3 @@
-"use strict";
 /**
  * Web3Adapter — optional web3.js signing/submission adapter.
  *
@@ -9,43 +8,8 @@
  * imported but any call to sign() or submitPublic() will throw with a clear
  * "web3 not installed" message rather than a cryptic module error.
  */
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.Web3Adapter = void 0;
-const ethers_1 = require("ethers");
-const ReceiptNormalizer_js_1 = require("../receipt/ReceiptNormalizer.js");
+import { keccak256 } from 'ethers';
+import { ReceiptNormalizer } from '../receipt/ReceiptNormalizer.js';
 // Lazy-load web3 so a missing package gives a helpful error at call time.
 let web3Module;
 async function getWeb3() {
@@ -53,7 +17,7 @@ async function getWeb3() {
         return web3Module;
     try {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        web3Module = await Promise.resolve().then(() => __importStar(require('web3')));
+        web3Module = await import('web3');
         return web3Module;
     }
     catch {
@@ -61,7 +25,7 @@ async function getWeb3() {
             'Run `npm install web3` or use the EthersV6Adapter instead.');
     }
 }
-class Web3Adapter {
+export class Web3Adapter {
     rpcUrl;
     nonceManager;
     chainId;
@@ -91,7 +55,7 @@ class Web3Adapter {
         const { Web3 } = await getWeb3();
         const web3 = new Web3(this.rpcUrl);
         // Derive signer address from key using ethers (no extra dep needed)
-        const { Wallet } = await Promise.resolve().then(() => __importStar(require('ethers')));
+        const { Wallet } = await import('ethers');
         const wallet = new Wallet(request.signerPrivateKey);
         const signerAddress = wallet.address;
         const nonce = request.nonce ??
@@ -151,7 +115,7 @@ class Web3Adapter {
                 submittedBlock: blockNum,
                 expiresAtBlock: request.expiresAtBlock,
                 txHash,
-                rawTxHash: (0, ethers_1.keccak256)(signed.rawTx),
+                rawTxHash: keccak256(signed.rawTx),
                 payloadHash: request.payloadHash,
                 routeHash: request.routeHash,
                 stateHash: request.stateHash,
@@ -172,7 +136,7 @@ class Web3Adapter {
         while (Date.now() < deadline) {
             const raw = await web3.eth.getTransactionReceipt(txHash);
             if (raw) {
-                return ReceiptNormalizer_js_1.ReceiptNormalizer.fromWeb3(raw);
+                return ReceiptNormalizer.fromWeb3(raw);
             }
             await sleep(this.pollIntervalMs);
         }
@@ -192,7 +156,7 @@ class Web3Adapter {
             submittedBlock: 0,
             expiresAtBlock: request.expiresAtBlock,
             txHash: '',
-            rawTxHash: (0, ethers_1.keccak256)(signed.rawTx),
+            rawTxHash: keccak256(signed.rawTx),
             payloadHash: request.payloadHash,
             routeHash: request.routeHash,
             stateHash: request.stateHash,
@@ -203,7 +167,6 @@ class Web3Adapter {
         };
     }
 }
-exports.Web3Adapter = Web3Adapter;
 function sleep(ms) {
     return new Promise((r) => setTimeout(r, ms));
 }

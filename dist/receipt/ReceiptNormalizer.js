@@ -1,12 +1,9 @@
-"use strict";
 /**
  * ReceiptNormalizer — converts any provider receipt (ethers v6 or web3) into
  * the single NormalizedReceipt format used internally by Apex.
  *
  * This is the boundary between the adapter world and the ledger world.
  */
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.ReceiptNormalizer = void 0;
 function toBigInt(value) {
     if (typeof value === 'bigint')
         return value;
@@ -31,7 +28,7 @@ function toBoolean(value) {
         return value === '0x1' || value === '1' || value === 'true';
     return false;
 }
-class ReceiptNormalizer {
+export class ReceiptNormalizer {
     /** Normalize an ethers v6 TransactionReceipt. */
     static fromEthers(receipt) {
         const gasUsed = receipt.gasUsed ?? 0n;
@@ -99,5 +96,4 @@ class ReceiptNormalizer {
         throw new Error('ReceiptNormalizer: unrecognized receipt shape');
     }
 }
-exports.ReceiptNormalizer = ReceiptNormalizer;
 //# sourceMappingURL=ReceiptNormalizer.js.map
