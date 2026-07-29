@@ -1,0 +1,12 @@
+[package]
+name        = "validator"
+description = "Candidate validator enforcing all Apex-Omega gate laws"
+version.workspace    = true
+edition.workspace    = true
+authors.workspace    = true
+license.workspace    = true
+
+[dependencies]
+scanner_core = { path = "../scanner_core" }
+adapters     = { path = "../adapters" }
+serde        = { workspace = true }

@@ -1,0 +1,15 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "scanner-pyo3"
+version = "0.1.0"
+description = "Apex-Omega Chain-137 scanner — Rust/PyO3 core"
+requires-python = ">=3.9"
+
+[tool.maturin]
+python-source = "python"
+manifest-path = "rust/crates/scanner_pyo3/Cargo.toml"
+module-name = "scanner_pyo3"
+features = ["pyo3/extension-module"]

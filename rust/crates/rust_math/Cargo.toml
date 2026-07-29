@@ -1,0 +1,19 @@
+[package]
+name        = "rust_math"
+description = "Fixed-point CFMM mathematics for the Apex-Omega scanner"
+version.workspace    = true
+edition.workspace    = true
+authors.workspace    = true
+license.workspace    = true
+
+[dependencies]
+primitive-types = { workspace = true }
+num-traits      = { workspace = true }
+serde           = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+
+[[bench]]
+name    = "cfmm_bench"
+harness = false
