@@ -14,9 +14,10 @@
  *   7. Emit LedgerRecord
  */
 
-import { Interface, keccak256, toUtf8Bytes } from 'ethers';
+import { AbiCoder, Interface, keccak256, toUtf8Bytes } from 'ethers';
 import type {
   ApexTxRequest,
+  C1StateCommitment,
   ConfigRecord,
   LedgerRecord,
   NormalizedReceipt,
@@ -82,6 +83,11 @@ export interface C1ExecutionResult {
   receipt: NormalizedReceipt;
   ledgerRecord: LedgerRecord;
   evidenceChain: EvidenceChain;
+  /**
+   * The authoritative C1_STATE_HASH commitment produced after the receipt
+   * confirms.  C2 must reload state from this hash before any decision.
+   */
+  c1StateCommitment: C1StateCommitment;
 }
 
 // ── C1Engine ──────────────────────────────────────────────────────────────────
@@ -176,7 +182,18 @@ export class C1Engine {
       c1TxHash: submission.txHash,
     });
 
-    return { cycleId: req.cycleId, submission, receipt, ledgerRecord, evidenceChain: chain };
+    // 7. Compute C1_STATE_HASH commitment from observed post-transaction state
+    const c1StateCommitment = computeC1StateHash({
+      chainId: req.state.chainId,
+      blockNumber: receipt.confirmedBlock,
+      transactionHash: receipt.txHash,
+      receipt,
+      executor: req.executor,
+      routeId: req.route.routeHash,
+      realizedProfit: '0',  // Placeholder; ledger settlement layer reconciles PnL
+    });
+
+    return { cycleId: req.cycleId, submission, receipt, ledgerRecord, evidenceChain: chain, c1StateCommitment };
   }
 }
 
@@ -194,4 +211,91 @@ function assertC1Function(name: (typeof C1_FUNCTIONS)[C1FlashProvider]): void {
   if (!fragment) {
     throw new Error(`C1Engine: missing ABI fragment for ${name}`);
   }
+}
+
+// ── C1 state commitment ───────────────────────────────────────────────────────
+
+interface ComputeC1StateHashParams {
+  chainId: number;
+  blockNumber: number;
+  transactionHash: string;
+  receipt: NormalizedReceipt;
+  executor: string;
+  routeId: string;
+  /**
+   * Realized net profit in USD.  Pass '0' until the settlement layer has
+   * reconciled the actual PnL; the commitment may be recomputed at that point.
+   */
+  realizedProfit: string;
+}
+
+/**
+ * Computes the authoritative C1_STATE_HASH commitment.
+ *
+ * H_{C1} = keccak256(encode[
+ *   chainId, blockNumber, transactionHash, affectedPoolIds,
+ *   postTradeStateHashes, realizedProfit, executor, routeId
+ * ])
+ *
+ * Commits to the observed post-transaction state by extracting affected pool
+ * addresses and per-pool state hashes directly from the confirmed receipt logs.
+ * This is authoritative over any pre-execution prediction.
+ */
+export function computeC1StateHash(params: ComputeC1StateHashParams): C1StateCommitment {
+  const { chainId, blockNumber, transactionHash, receipt, executor, routeId, realizedProfit } = params;
+
+  const abiCoder = AbiCoder.defaultAbiCoder();
+
+  // Deduplicated set of pool addresses touched in the receipt logs
+  const affectedPoolIds = [...new Set(receipt.logs.map((l) => l.address.toLowerCase()))];
+
+  // Per-pool post-trade state hash: ABI-encode each pool's logs deterministically
+  const postTradeStateHashes = affectedPoolIds.map((poolAddress) => {
+    const poolLogs = receipt.logs
+      .filter((l) => l.address.toLowerCase() === poolAddress)
+      .sort((a, b) => a.logIndex - b.logIndex);
+
+    // ABI-encode log fields in a fixed order for determinism across environments
+    const encodedLogs = abiCoder.encode(
+      ['tuple(address address, bytes32[] topics, bytes data, uint256 logIndex)[]'],
+      [
+        poolLogs.map((l) => ({
+          address: l.address,
+          topics: l.topics,
+          data: l.data,
+          logIndex: l.logIndex,
+        })),
+      ],
+    );
+    return keccak256(encodedLogs);
+  });
+
+  // ABI-encode all fields for a fully typed, deterministic commitment
+  const encoded = abiCoder.encode(
+    ['uint256', 'uint256', 'bytes32', 'address[]', 'bytes32[]', 'string', 'address', 'bytes32'],
+    [
+      chainId,
+      blockNumber,
+      transactionHash,
+      affectedPoolIds,
+      postTradeStateHashes,
+      realizedProfit,
+      executor,
+      routeId,
+    ],
+  );
+
+  const c1StateHash = keccak256(encoded);
+
+  return {
+    c1StateHash,
+    chainId,
+    blockNumber,
+    transactionHash,
+    affectedPoolIds,
+    postTradeStateHashes,
+    realizedProfit,
+    executor,
+    routeId,
+  };
 }
