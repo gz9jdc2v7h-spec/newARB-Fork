@@ -16,6 +16,14 @@ import { findArbitragePaths, cycleKey, ArbPath } from "../math/BellmanFord";
 import { kellyScore } from "../math/KellyCriterion";
 import { EmaTracker, classifyRegime } from "../math/EmaTracker";
 import { selectOptimalPortfolio, PortfolioSelection } from "../math/QuantumSelector";
+import {
+  buildExecutableMultiHopRoutes,
+  ExecutableMultiHopRoute,
+} from "../routing/MultiHopRouter";
+
+// Preserve at least 10% of the raw Kelly score so shallow pools are penalized
+// without collapsing otherwise-profitable opportunities to zero.
+const MIN_DEPTH_PENALTY = 0.1;
 
 export interface ArbitrageOpportunity {
   /** Human-readable description */
@@ -51,6 +59,16 @@ export interface ArbitrageOpportunity {
   priceImpactSell: number;
   /** True if this opportunity is part of a detected Bellman–Ford cycle. */
   isMultiHop: boolean;
+  /** Oldest quote age across both legs. */
+  quoteAgeMs: number;
+  /** How the trade size was derived. */
+  sizingMethod: "cfmm_closed_form" | "spread_scaled";
+  /** Invariant families used by the route. */
+  invariantFamilies: string[];
+  /** Route shape for downstream execution policy. */
+  routeKind: "two_leg" | "multi_hop";
+  /** Fully constructed route if multi-hop execution is available. */
+  multiHopRoute?: ExecutableMultiHopRoute;
 }
 
 // ─── Token price oracle (derived from snapshot) ───────────────────────────────
@@ -136,7 +154,13 @@ function buildTokenPricesUsd(snapshot: PairQuotes[], ethUsd: number): Map<string
  *   Pool 2: r2 = buyQuote.reserveOut  (tokenOut reserve of low-price pool)
  *           s2 = buyQuote.reserveIn   (tokenIn  reserve of low-price pool)
  */
-function computeOptimalInput(buyQuote: PriceQuote, sellQuote: PriceQuote): bigint {
+function computeOptimalInput(
+  buyQuote: PriceQuote,
+  sellQuote: PriceQuote
+): {
+  amountIn: bigint;
+  sizingMethod: "cfmm_closed_form" | "spread_scaled";
+} {
   const hasBuyReserves =
     buyQuote.reserveIn !== undefined &&
     buyQuote.reserveOut !== undefined &&
@@ -171,17 +195,22 @@ function computeOptimalInput(buyQuote: PriceQuote, sellQuote: PriceQuote): bigin
         buyQuote.reserveIn!,
         buyQuote.feeBps!
       );
-      if (profit > 0n) return x;
+      if (profit > 0n) {
+        return { amountIn: x, sizingMethod: "cfmm_closed_form" };
+      }
     }
   }
 
   // Fallback: spread-proportional fraction of quoted amount.
   const spread = (sellQuote.price - buyQuote.price) / buyQuote.price;
-  if (spread <= 0) return 0n;
+  if (spread <= 0) return { amountIn: 0n, sizingMethod: "spread_scaled" };
 
   // Conservative cap: 60 % of quoted amount, scaled by spread magnitude
   const factor = Math.min(0.6 + spread * 4, 1.0);
-  return BigInt(Math.floor(Number(sellQuote.amountIn) * factor));
+  return {
+    amountIn: BigInt(Math.floor(Number(sellQuote.amountIn) * factor)),
+    sizingMethod: "spread_scaled",
+  };
 }
 
 // ─── Exact two-leg profit from real on-chain data ────────────────────────────
@@ -282,11 +311,31 @@ export class OpportunityRanker {
     // Run Bellman–Ford to find multi-hop cycles (informs scoring bonus)
     const arbPaths = findArbitragePaths(snapshot);
     const multiHopKeys = new Set(arbPaths.map((p) => cycleKey(p.tokens)));
+    const executableRoutes = buildExecutableMultiHopRoutes(
+      snapshot,
+      arbPaths,
+      ethers.parseEther("1")
+    );
+    const routesByCycleKey = new Map<string, ExecutableMultiHopRoute[]>();
+    for (const route of executableRoutes) {
+      if (!route.valid) continue;
+      const key = cycleKey(route.tokens);
+      const arr = routesByCycleKey.get(key) ?? [];
+      arr.push(route);
+      routesByCycleKey.set(key, arr);
+    }
 
     // Enumerate two-pool opportunities across all pairs in parallel
     const oppArrays = await Promise.all(
       snapshot.map((pairData) =>
-        this.findOpportunities(pairData, gasData, ethUsd, multiHopKeys, tokenPrices)
+        this.findOpportunities(
+          pairData,
+          gasData,
+          ethUsd,
+          multiHopKeys,
+          tokenPrices,
+          routesByCycleKey
+        )
       )
     );
     const opportunities = oppArrays.flat();
@@ -342,7 +391,8 @@ export class OpportunityRanker {
     gasData: GasData,
     ethUsd: number,
     multiHopKeys: Set<string>,
-    tokenPrices: Map<string, number>
+    tokenPrices: Map<string, number>,
+    routesByCycleKey: Map<string, ExecutableMultiHopRoute[]>
   ): Promise<ArbitrageOpportunity[]> {
     const { tokenIn, tokenOut, quotes } = pairData;
     if (quotes.length < 2) return [];
@@ -372,7 +422,10 @@ export class OpportunityRanker {
         if (regime === "extreme" && spread < MAX_SLIPPAGE * 4) continue;
 
         // ── Closed-form or spread-proportional optimal trade size ──────────
-        const tradeAmountIn = computeOptimalInput(buyQuote, sellQuote);
+        const { amountIn: tradeAmountIn, sizingMethod } = computeOptimalInput(
+          buyQuote,
+          sellQuote
+        );
         if (tradeAmountIn === 0n) continue;
 
         const tokenInCfg = TOKENS[tokenIn];
@@ -415,12 +468,6 @@ export class OpportunityRanker {
             ? cfmmPriceImpact(sellQuote.reserveIn, tradeAmountIn, sellQuote.feeBps)
             : spread / 2;
 
-        // ── Liquidity depth — retained for future liquidity-depth scoring ─
-        // TODO: incorporate buyDepth into the Kelly score as a pool-size penalty
-        if (buyQuote.reserveIn !== undefined) {
-          cfmmLiquidityDepth(buyQuote.reserveIn, tokenInCfg.decimals, ethUsd);
-        }
-
         // ── Actual capital deployed for Kelly & portfolio scoring ─────────
         // tradeAmountIn × per-token USD price — correct for all token types.
         const tradeAmountInNormalized = Number(tradeAmountIn) / 10 ** tokenInCfg.decimals;
@@ -428,14 +475,40 @@ export class OpportunityRanker {
         // capitalUsd = actual capital deployed (not inflated by gas cost)
         const capitalUsd = tradeAmountInUsd;
 
+        // ── Liquidity depth penalty ───────────────────────────────────────
+        const buyDepthUsd =
+          buyQuote.reserveIn !== undefined
+            ? cfmmLiquidityDepth(
+                buyQuote.reserveIn,
+                tokenInCfg.decimals,
+                tokenInPriceUsd,
+              )
+            : Number.POSITIVE_INFINITY;
+        // Penalize shallow pools exponentially: once deployed capital grows
+        // toward the buy-side liquidity depth, the Kelly score decays quickly
+        // to reflect higher price-impact and execution-risk exposure.
+        const depthPenalty =
+          Number.isFinite(buyDepthUsd) && buyDepthUsd > 0
+            ? Math.max(
+                MIN_DEPTH_PENALTY,
+                Math.exp(-capitalUsd / buyDepthUsd),
+              )
+            : 1;
+
         // ── Kelly risk-adjusted score ─────────────────────────────────────
         const volatilityFactor = pairStats ? 1 + pairStats.dailyVolatility * 10 : 1;
         const baseScore = kellyScore(netProfitUsd, gasCostUsd, capitalUsd, 0.88, volatilityFactor);
+        const depthAdjustedScore = baseScore * depthPenalty;
 
         // ── Multi-hop bonus: confirmed Bellman–Ford cycle → +15 % score ───
         const pairKey = cycleKey([tokenIn, tokenOut]);
-        const isMultiHop = multiHopKeys.has(pairKey);
-        const score = isMultiHop ? baseScore * 1.15 : baseScore;
+        const selectedRoute = Array.from(routesByCycleKey.entries())
+          .filter(([k]) => k.includes(tokenIn) && k.includes(tokenOut))
+          .flatMap(([, routes]) => routes)
+          .find((route) => route.valid);
+        const isMultiHop = Boolean(selectedRoute) || multiHopKeys.has(pairKey);
+        const score = isMultiHop ? depthAdjustedScore * 1.15 : depthAdjustedScore;
+        const quoteAgeMs = Date.now() - Math.min(buyQuote.timestamp, sellQuote.timestamp);
 
         const label = `${tokenIn}→${tokenOut} [${buyQuote.dex}↔${sellQuote.dex}]${isMultiHop ? " 🔄" : ""}`;
 
@@ -454,6 +527,13 @@ export class OpportunityRanker {
           priceImpactBuy,
           priceImpactSell,
           isMultiHop,
+          quoteAgeMs,
+          sizingMethod,
+          invariantFamilies: Array.from(
+            new Set([buyQuote.invariantFamily, sellQuote.invariantFamily])
+          ),
+          routeKind: selectedRoute ? "multi_hop" : "two_leg",
+          multiHopRoute: selectedRoute,
         });
       }
     }

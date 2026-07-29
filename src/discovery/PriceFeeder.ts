@@ -10,6 +10,8 @@ import {
 
 export interface PriceQuote {
   dex: string;
+  invariantFamily: "ConstantProduct" | "ConcentratedLiquidity" | "Weighted";
+  quoteSource: "reserves" | "quoter";
   tokenIn: string;
   tokenOut: string;
   amountIn: bigint;
@@ -194,6 +196,8 @@ async function quoteUniV2(
 
   return {
     dex: dex.name,
+    invariantFamily: "ConstantProduct",
+    quoteSource: "reserves",
     tokenIn: tokenInSym,
     tokenOut: tokenOutSym,
     amountIn,
@@ -205,6 +209,7 @@ async function quoteUniV2(
     reserveIn,
     reserveOut,
     feeBps: fee / 100, // convert ppm → bps (e.g. 3000 → 30)
+    metadata: { pair: pairAddr },
   };
 }
 
@@ -245,6 +250,8 @@ async function quoteUniV3(
       if (!best || amountOut > best.amountOut) {
         best = {
           dex: dex.name,
+          invariantFamily: "ConcentratedLiquidity",
+          quoteSource: "quoter",
           tokenIn: tokenInSym,
           tokenOut: tokenOutSym,
           amountIn,
@@ -368,4 +375,8 @@ export async function fetchQuote(
     return quoteUniV3(provider, dex, tokenInSym, tokenOutSym, _amountIn);
   }
   return quoteBalancer(provider, dex, tokenInSym, tokenOutSym, _amountIn);
+}
+
+export function isDexEnabled(name: string): boolean {
+  return DEXES.some((dex) => dex.name === name);
 }

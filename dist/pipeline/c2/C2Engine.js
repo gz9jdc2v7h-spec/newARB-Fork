@@ -1,3 +1,4 @@
+"use strict";
 /**
  * C2Engine — hooks for the C2 (second-cycle) MIRROR / REVERSE / NOOP path.
  *
@@ -19,24 +20,26 @@
  *   8. Write c2_cycle settlement record
  *   9. Emit LedgerRecord
  */
-import { keccak256, toUtf8Bytes } from 'ethers';
-import { EvidenceChain } from '../transparency/EvidenceChain.js';
-import { AuditLogger } from '../transparency/AuditLogger.js';
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.C2Engine = void 0;
+const ethers_1 = require("ethers");
+const EvidenceChain_js_1 = require("../transparency/EvidenceChain.js");
+const AuditLogger_js_1 = require("../transparency/AuditLogger.js");
 // ── C2Engine ──────────────────────────────────────────────────────────────────
-export class C2Engine {
+class C2Engine {
     submitter;
     logger;
     constructor(submitter, logger) {
         this.submitter = submitter;
-        this.logger = logger ?? new AuditLogger();
+        this.logger = logger ?? new AuditLogger_js_1.AuditLogger();
     }
     async execute(req) {
-        const chain = new EvidenceChain(req.opportunityId, req.config.configVersion, req.config.configHash);
+        const chain = new EvidenceChain_js_1.EvidenceChain(req.opportunityId, req.config.configVersion, req.config.configHash);
         chain.setConfig(req.config);
         chain.setState(req.postC1State);
         chain.setRoute(req.c2Route);
         const postC1StateHash = req.postC1State.stateHash;
-        const c2RouteHash = keccak256(toUtf8Bytes(JSON.stringify(req.c2Route)));
+        const c2RouteHash = (0, ethers_1.keccak256)((0, ethers_1.toUtf8Bytes)(JSON.stringify(req.c2Route)));
         chain.setC2({
             cycleId: req.cycleId,
             parentC1TxHash: req.parentC1TxHash,
@@ -175,4 +178,5 @@ export class C2Engine {
         };
     }
 }
+exports.C2Engine = C2Engine;
 //# sourceMappingURL=C2Engine.js.map

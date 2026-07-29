@@ -1,3 +1,4 @@
+"use strict";
 /**
  * PrivateRelaySubmitter — sends a pre-signed raw transaction to a private relay
  * (e.g. Fastlane, Flashbots, MEV Blocker, BloxRoute).
@@ -8,8 +9,10 @@
  * This path NEVER falls back to public mempool unless the caller explicitly
  * sets publicFallback = true in the ApexTxRequest.
  */
-import { keccak256 } from 'ethers';
-import { ReceiptNormalizer } from '../receipt/ReceiptNormalizer.js';
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.PrivateRelaySubmitter = void 0;
+const ethers_1 = require("ethers");
+const ReceiptNormalizer_js_1 = require("../receipt/ReceiptNormalizer.js");
 /** Relay-provider name → JSON-RPC method (some relays use non-standard names). */
 const RELAY_METHODS = {
     flashbots: 'eth_sendBundle', // simplified; real bundles need extra fields
@@ -18,7 +21,7 @@ const RELAY_METHODS = {
     bloxroute: 'eth_sendRawTransaction',
     default: 'eth_sendRawTransaction',
 };
-export class PrivateRelaySubmitter {
+class PrivateRelaySubmitter {
     endpoint;
     relayName;
     authHeader;
@@ -37,13 +40,6 @@ export class PrivateRelaySubmitter {
     }
     // ── Submit ────────────────────────────────────────────────────────────────────
     async submit(signed, request) {
-        const method = RELAY_METHODS[this.relayName] ?? RELAY_METHODS['default'];
-        const body = JSON.stringify({
-            jsonrpc: '2.0',
-            id: 1,
-            method,
-            params: [signed.rawTx],
-        });
         const headers = {
             'Content-Type': 'application/json',
         };
@@ -51,8 +47,16 @@ export class PrivateRelaySubmitter {
             headers['Authorization'] = this.authHeader;
         }
         let relayResponse;
+        let relayPayload;
         let submittedBlock = 0;
         try {
+            relayPayload = this.buildRelayPayload(signed, request);
+            const body = JSON.stringify({
+                jsonrpc: '2.0',
+                id: 1,
+                method: relayPayload.method,
+                params: relayPayload.params,
+            });
             const controller = new AbortController();
             const timer = setTimeout(() => controller.abort(), this.timeoutMs);
             const res = await fetch(this.endpoint, {
@@ -71,7 +75,7 @@ export class PrivateRelaySubmitter {
         if (relayResponse.error) {
             return this.buildFailedResult(signed, request, `Relay rejected: [${relayResponse.error.code}] ${relayResponse.error.message}`);
         }
-        const txHash = relayResponse.result ?? keccak256(signed.rawTx);
+        const txHash = relayPayload?.txHash ?? (0, ethers_1.keccak256)(signed.rawTx);
         try {
             submittedBlock = await this.fetchCurrentBlock();
         }
@@ -91,7 +95,7 @@ export class PrivateRelaySubmitter {
             submittedBlock,
             expiresAtBlock: request.expiresAtBlock,
             txHash,
-            rawTxHash: keccak256(signed.rawTx),
+            rawTxHash: (0, ethers_1.keccak256)(signed.rawTx),
             payloadHash: request.payloadHash,
             routeHash: request.routeHash,
             stateHash: request.stateHash,
@@ -108,7 +112,7 @@ export class PrivateRelaySubmitter {
         while (Date.now() < deadline) {
             const raw = await this.rpcGetReceipt(rpcUrl, txHash);
             if (raw) {
-                return ReceiptNormalizer.normalize(raw);
+                return ReceiptNormalizer_js_1.ReceiptNormalizer.normalize(raw);
             }
             await sleep(this.pollIntervalMs);
         }
@@ -144,6 +148,32 @@ export class PrivateRelaySubmitter {
         const json = (await res.json());
         return parseInt(json.result ?? '0x0', 16);
     }
+    buildRelayPayload(signed, request) {
+        const method = RELAY_METHODS[this.relayName] ?? RELAY_METHODS['default'];
+        const rawTxHash = (0, ethers_1.keccak256)(signed.rawTx);
+        if (this.relayName !== 'flashbots') {
+            return {
+                method,
+                params: [signed.rawTx],
+                txHash: rawTxHash,
+            };
+        }
+        const targetBlock = request.blockNumber + 1;
+        if (request.expiresAtBlock < targetBlock) {
+            throw new Error(`Flashbots bundle expires before the next block: expiresAtBlock=${request.expiresAtBlock}, nextBlock=${targetBlock}`);
+        }
+        return {
+            method,
+            params: [
+                {
+                    txs: [signed.rawTx],
+                    blockNumber: toRpcQuantity(targetBlock),
+                    revertingTxHashes: [],
+                },
+            ],
+            txHash: rawTxHash,
+        };
+    }
     buildFailedResult(signed, request, errorMsg) {
         return {
             opportunityId: request.opportunityId,
@@ -158,7 +188,7 @@ export class PrivateRelaySubmitter {
             submittedBlock: 0,
             expiresAtBlock: request.expiresAtBlock,
             txHash: '',
-            rawTxHash: keccak256(signed.rawTx),
+            rawTxHash: (0, ethers_1.keccak256)(signed.rawTx),
             payloadHash: request.payloadHash,
             routeHash: request.routeHash,
             stateHash: request.stateHash,
@@ -169,7 +199,11 @@ export class PrivateRelaySubmitter {
         };
     }
 }
+exports.PrivateRelaySubmitter = PrivateRelaySubmitter;
 function sleep(ms) {
     return new Promise((r) => setTimeout(r, ms));
+}
+function toRpcQuantity(value) {
+    return `0x${Math.max(0, Math.trunc(value)).toString(16)}`;
 }
 //# sourceMappingURL=PrivateRelaySubmitter.js.map

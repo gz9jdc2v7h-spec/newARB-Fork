@@ -1,3 +1,4 @@
+"use strict";
 /**
  * ApexTxSubmitter — the single controlled transaction gateway.
  *
@@ -12,24 +13,28 @@
  *
  * Every call path emits a LedgerRecord via the AuditLogger.
  */
-import { JsonRpcProvider } from 'ethers';
-import { NonceManager } from '../nonce/NonceManager.js';
-import { EthersV6Adapter } from '../adapters/EthersV6Adapter.js';
-import { PrivateRelaySubmitter } from '../relay/PrivateRelaySubmitter.js';
-import { AuditLogger } from '../pipeline/transparency/AuditLogger.js';
-export class ApexTxSubmitter {
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.ApexTxSubmitter = void 0;
+const ethers_1 = require("ethers");
+const NonceManager_js_1 = require("../nonce/NonceManager.js");
+const EthersV6Adapter_js_1 = require("../adapters/EthersV6Adapter.js");
+const PrivateRelaySubmitter_js_1 = require("../relay/PrivateRelaySubmitter.js");
+const AuditLogger_js_1 = require("../pipeline/transparency/AuditLogger.js");
+const MAX_CACHED_SIGNED_REQUESTS = 512;
+class ApexTxSubmitter {
     provider;
     nonceManager;
     ethersAdapter;
     relaySubmitter;
     logger;
     receiptTimeoutMs;
+    signedRequestCache = new Map();
     constructor(config) {
-        this.provider = new JsonRpcProvider(config.rpcUrl);
-        this.nonceManager = new NonceManager(this.provider);
+        this.provider = new ethers_1.JsonRpcProvider(config.rpcUrl);
+        this.nonceManager = new NonceManager_js_1.NonceManager(this.provider);
         this.receiptTimeoutMs = config.receiptTimeoutMs ?? 120_000;
-        this.logger = config.logger ?? new AuditLogger();
-        this.ethersAdapter = new EthersV6Adapter({
+        this.logger = config.logger ?? new AuditLogger_js_1.AuditLogger();
+        this.ethersAdapter = new EthersV6Adapter_js_1.EthersV6Adapter({
             provider: this.provider,
             nonceManager: this.nonceManager,
             chainId: config.chainId,
@@ -37,7 +42,7 @@ export class ApexTxSubmitter {
             receiptTimeoutMs: config.receiptTimeoutMs,
         });
         if (config.relay) {
-            this.relaySubmitter = new PrivateRelaySubmitter({
+            this.relaySubmitter = new PrivateRelaySubmitter_js_1.PrivateRelaySubmitter({
                 endpoint: config.relay.endpoint,
                 relayName: config.relay.relayName,
                 authHeader: config.relay.authHeader,
@@ -53,15 +58,21 @@ export class ApexTxSubmitter {
         return this.ethersAdapter.build(request);
     }
     async sign(request) {
-        return this.ethersAdapter.sign(request);
+        const signed = await this.ethersAdapter.sign(request);
+        const cacheKey = (0, ethers_1.keccak256)(signed.rawTx);
+        this.ensureCacheCapacityFor(cacheKey);
+        this.signedRequestCache.set(cacheKey, request);
+        return signed;
     }
     async submit(signed) {
-        // We need the originating request to determine relay policy.
-        // submit() receives a SignedTx, so relay policy was baked in at sign() time.
-        // Callers should use submitWithRequest() for relay-aware submission.
-        // This overload assumes public submission (used by tests / dry-run).
-        throw new Error('ApexTxSubmitter: call submitWithRequest(signed, request) instead of submit(signed). ' +
-            'Relay policy requires the original ApexTxRequest.');
+        const cacheKey = (0, ethers_1.keccak256)(signed.rawTx);
+        const request = this.signedRequestCache.get(cacheKey);
+        if (!request) {
+            throw new Error('ApexTxSubmitter: missing cached ApexTxRequest for signed transaction. ' +
+                'Ensure submit() is called with the SignedTx returned by this instance’s sign() method.');
+        }
+        this.signedRequestCache.delete(cacheKey);
+        return this.submitWithRequest(signed, request);
     }
     /**
      * Full submit: private relay first (if configured), public fallback only if
@@ -141,5 +152,16 @@ export class ApexTxSubmitter {
             configHash: request.configHash,
         };
     }
+    ensureCacheCapacityFor(cacheKey) {
+        if (this.signedRequestCache.has(cacheKey) ||
+            this.signedRequestCache.size < MAX_CACHED_SIGNED_REQUESTS) {
+            return;
+        }
+        const oldestKey = this.signedRequestCache.keys().next().value;
+        if (oldestKey) {
+            this.signedRequestCache.delete(oldestKey);
+        }
+    }
 }
+exports.ApexTxSubmitter = ApexTxSubmitter;
 //# sourceMappingURL=ApexTxSubmitter.js.map

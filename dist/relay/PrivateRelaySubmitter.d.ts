@@ -38,6 +38,7 @@ export declare class PrivateRelaySubmitter {
     waitForReceipt(txHash: string, timeoutMs?: number): Promise<NormalizedReceipt>;
     private rpcGetReceipt;
     private fetchCurrentBlock;
+    private buildRelayPayload;
     private buildFailedResult;
 }
 //# sourceMappingURL=PrivateRelaySubmitter.d.ts.map

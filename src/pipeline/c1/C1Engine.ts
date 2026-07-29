@@ -14,7 +14,7 @@
  *   7. Emit LedgerRecord
  */
 
-import { keccak256, toUtf8Bytes } from 'ethers';
+import { Interface, keccak256, toUtf8Bytes } from 'ethers';
 import type {
   ApexTxRequest,
   ConfigRecord,
@@ -32,10 +32,18 @@ import { AuditLogger } from '../transparency/AuditLogger.js';
 
 export type C1FlashProvider = 'aave' | 'balancer';
 
-export const C1_SELECTORS: Record<C1FlashProvider, string> = {
-  aave:     '0x' + Buffer.from('initAaveFlash(address,uint256,bytes)').slice(0, 4).toString('hex'),
-  balancer: '0x' + Buffer.from('initBalancerFlash(address,uint256,bytes)').slice(0, 4).toString('hex'),
-};
+const C1_FUNCTIONS = {
+  aave: 'initAaveFlash',
+  balancer: 'initBalancerFlash',
+} as const;
+
+const C1_INTERFACE = new Interface([
+  'function initAaveFlash(address borrowAsset, uint256 borrowAmount, bytes encodedRoutePayload)',
+  'function initBalancerFlash(address borrowAsset, uint256 borrowAmount, bytes encodedRoutePayload)',
+]);
+
+assertC1Function(C1_FUNCTIONS.aave);
+assertC1Function(C1_FUNCTIONS.balancer);
 
 // ── Input to C1 execution ─────────────────────────────────────────────────────
 
@@ -175,15 +183,15 @@ export class C1Engine {
 // ── ABI encoding helpers ──────────────────────────────────────────────────────
 
 function encodeC1Calldata(req: C1ExecutionRequest): string {
-  // In production this would use ethers AbiCoder. Here we produce a
-  // deterministic placeholder that preserves the selector + params structure.
-  // Replace with full AbiCoder.encode when the executor ABI is finalized.
-  const { AbiCoder } = require('ethers');
-  const coder = AbiCoder.defaultAbiCoder();
-  const selector = C1_SELECTORS[req.flashProvider];
-  const encoded = coder.encode(
-    ['address', 'uint256', 'bytes'],
+  return C1_INTERFACE.encodeFunctionData(
+    C1_FUNCTIONS[req.flashProvider],
     [req.borrowAsset, req.borrowAmount, req.encodedRoutePayload],
   );
-  return selector + encoded.slice(2); // strip 0x from ABI body
+}
+
+function assertC1Function(name: (typeof C1_FUNCTIONS)[C1FlashProvider]): void {
+  const fragment = C1_INTERFACE.getFunction(name);
+  if (!fragment) {
+    throw new Error(`C1Engine: missing ABI fragment for ${name}`);
+  }
 }
