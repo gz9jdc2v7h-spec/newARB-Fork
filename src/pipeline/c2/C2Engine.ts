@@ -260,6 +260,25 @@ export class C2Engine {
       };
     }
 
+    if (!c2RouteHash) {
+      this.logger.logRejection({
+        opportunityId: req.opportunityId,
+        stage: 'SUBMISSION',
+        status: 'REJECTED',
+        reason: 'PAYLOAD_ABI_MISMATCH',
+        configVersion: req.config.configVersion,
+        stateHash: postC1StateHash,
+        detail: 'Selected candidate missing route hash',
+        timestamp: Date.now(),
+      });
+      return {
+        cycleId: req.cycleId,
+        decision,
+        skipped: true,
+        evidenceChain: chain,
+      };
+    }
+
     // ── Execute C2 ─────────────────────────────────────────────────────────────
     const txRequest: ApexTxRequest = {
       opportunityId: req.opportunityId,
@@ -275,7 +294,7 @@ export class C2Engine {
       data: selectedCandidate.encodedRoutePayload,
       opportunityHash: req.opportunityHash,
       payloadHash: req.payloadHash,
-      routeHash: c2RouteHash!,
+      routeHash: c2RouteHash,
       stateHash: postC1StateHash,
       configHash: req.config.configHash,
       configVersion: req.config.configVersion,
@@ -302,7 +321,7 @@ export class C2Engine {
       rawTxHash: submission.rawTxHash,
       txHash: submission.txHash,
       payloadHash: req.payloadHash,
-      routeHash: c2RouteHash!,
+      routeHash: c2RouteHash,
       stateHash: postC1StateHash,
       configHash: req.config.configHash,
       configVersion: req.config.configVersion,

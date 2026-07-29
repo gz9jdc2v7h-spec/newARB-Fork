@@ -1,3 +1,4 @@
+"use strict";
 /**
  * AuditLogger — writes immutable stage evidence to any sink that implements
  * the LogSink interface (console, file, DB, event-bus, etc.).
@@ -11,9 +12,12 @@
  *  - Every rejection is logged with the same severity as a win.
  *  - Estimated / Simulated / Realized PnL are never mixed in the same record.
  */
-import { keccak256, toUtf8Bytes } from 'ethers';
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.AuditLogger = exports.MultiSink = exports.ConsoleSink = void 0;
+exports.buildMinimumEvidence = buildMinimumEvidence;
+const ethers_1 = require("ethers");
 // ── Console sink (default) ────────────────────────────────────────────────────
-export class ConsoleSink {
+class ConsoleSink {
     write(entry) {
         const line = JSON.stringify({
             t: entry.timestamp,
@@ -25,8 +29,9 @@ export class ConsoleSink {
         process.stdout.write(line + '\n');
     }
 }
+exports.ConsoleSink = ConsoleSink;
 // ── Multi-sink (fan-out) ──────────────────────────────────────────────────────
-export class MultiSink {
+class MultiSink {
     sinks;
     constructor(sinks) {
         this.sinks = sinks;
@@ -35,8 +40,9 @@ export class MultiSink {
         await Promise.all(this.sinks.map((s) => s.write(entry)));
     }
 }
+exports.MultiSink = MultiSink;
 // ── AuditLogger ───────────────────────────────────────────────────────────────
-export class AuditLogger {
+class AuditLogger {
     sink;
     constructor(sink) {
         this.sink = sink ?? new ConsoleSink();
@@ -95,15 +101,16 @@ export class AuditLogger {
         void this.sink.write(entry);
     }
 }
+exports.AuditLogger = AuditLogger;
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function hashRecord(record) {
-    return keccak256(toUtf8Bytes(JSON.stringify(record)));
+    return (0, ethers_1.keccak256)((0, ethers_1.toUtf8Bytes)(JSON.stringify(record)));
 }
 /**
  * Builds the minimum evidence record required by the ledger invariant.
  * All hash fields are required; missing values default to '0x0'.
  */
-export function buildMinimumEvidence(chain) {
+function buildMinimumEvidence(chain) {
     return {
         opportunity_id: chain.opportunityId,
         config_version: chain.configVersion ?? 0,

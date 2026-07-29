@@ -1,3 +1,4 @@
+"use strict";
 /**
  * C1Engine — hooks for the C1 (first-cycle) flash-loan arbitrage path.
  *
@@ -13,23 +14,26 @@
  *   6. Write c1_cycle settlement record to ledger
  *   7. Emit LedgerRecord
  */
-import { keccak256, toUtf8Bytes } from 'ethers';
-import { EvidenceChain } from '../transparency/EvidenceChain.js';
-import { AuditLogger } from '../transparency/AuditLogger.js';
-export const C1_SELECTORS = {
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.C1Engine = exports.C1_SELECTORS = void 0;
+exports.buildC1StateCommitment = buildC1StateCommitment;
+const ethers_1 = require("ethers");
+const EvidenceChain_js_1 = require("../transparency/EvidenceChain.js");
+const AuditLogger_js_1 = require("../transparency/AuditLogger.js");
+exports.C1_SELECTORS = {
     aave: '0x' + Buffer.from('initAaveFlash(address,uint256,bytes)').slice(0, 4).toString('hex'),
     balancer: '0x' + Buffer.from('initBalancerFlash(address,uint256,bytes)').slice(0, 4).toString('hex'),
 };
 // ── C1Engine ──────────────────────────────────────────────────────────────────
-export class C1Engine {
+class C1Engine {
     submitter;
     logger;
     constructor(submitter, logger) {
         this.submitter = submitter;
-        this.logger = logger ?? new AuditLogger();
+        this.logger = logger ?? new AuditLogger_js_1.AuditLogger();
     }
     async execute(req) {
-        const chain = new EvidenceChain(req.opportunityId, req.config.configVersion, req.config.configHash);
+        const chain = new EvidenceChain_js_1.EvidenceChain(req.opportunityId, req.config.configVersion, req.config.configHash);
         chain.setConfig(req.config);
         chain.setState(req.state);
         chain.setRoute(req.route);
@@ -41,7 +45,7 @@ export class C1Engine {
         });
         // 1. Build calldata
         const calldata = encodeC1Calldata(req);
-        const routeHash = keccak256(toUtf8Bytes(JSON.stringify(req.route)));
+        const routeHash = (0, ethers_1.keccak256)((0, ethers_1.toUtf8Bytes)(JSON.stringify(req.route)));
         // 2. Build ApexTxRequest
         const txRequest = {
             opportunityId: req.opportunityId,
@@ -75,6 +79,7 @@ export class C1Engine {
         // 5. Wait for receipt
         const receipt = await this.submitter.wait(submission.txHash);
         this.logger.logReceipt(req.opportunityId, receipt);
+        const c1StateCommitment = buildC1StateCommitment(req, receipt, submission.txHash);
         // 6. Build ledger record
         const ledgerRecord = {
             opportunityId: req.opportunityId,
@@ -100,10 +105,21 @@ export class C1Engine {
             c1RouteHash: routeHash,
             c1SimHash: req.simulationHash,
             c1TxHash: submission.txHash,
+            c1RealizedNetUsd: req.postC1ObservedState.realizedProfitUsd,
+            c1StateHash: c1StateCommitment.c1StateHash,
+            c1StateCommitment,
         });
-        return { cycleId: req.cycleId, submission, receipt, ledgerRecord, evidenceChain: chain };
+        return {
+            cycleId: req.cycleId,
+            submission,
+            receipt,
+            ledgerRecord,
+            c1StateCommitment,
+            evidenceChain: chain,
+        };
     }
 }
+exports.C1Engine = C1Engine;
 // ── ABI encoding helpers ──────────────────────────────────────────────────────
 function encodeC1Calldata(req) {
     // In production this would use ethers AbiCoder. Here we produce a
@@ -111,8 +127,32 @@ function encodeC1Calldata(req) {
     // Replace with full AbiCoder.encode when the executor ABI is finalized.
     const { AbiCoder } = require('ethers');
     const coder = AbiCoder.defaultAbiCoder();
-    const selector = C1_SELECTORS[req.flashProvider];
+    const selector = exports.C1_SELECTORS[req.flashProvider];
     const encoded = coder.encode(['address', 'uint256', 'bytes'], [req.borrowAsset, req.borrowAmount, req.encodedRoutePayload]);
     return selector + encoded.slice(2); // strip 0x from ABI body
+}
+function buildC1StateCommitment(req, receipt, txHash) {
+    const routeId = req.postC1ObservedState.routeId ?? req.route.routeHash;
+    const encoded = ethers_1.AbiCoder.defaultAbiCoder().encode(['uint256', 'uint256', 'bytes32', 'string[]', 'bytes32[]', 'string', 'address', 'string'], [
+        req.state.chainId,
+        receipt.confirmedBlock,
+        txHash,
+        req.postC1ObservedState.affectedPoolIds,
+        req.postC1ObservedState.postTradeStateHashes,
+        req.postC1ObservedState.realizedProfitUsd,
+        req.executor,
+        routeId,
+    ]);
+    return {
+        chainId: req.state.chainId,
+        blockNumber: receipt.confirmedBlock,
+        transactionHash: txHash,
+        affectedPoolIds: req.postC1ObservedState.affectedPoolIds,
+        postTradeStateHashes: req.postC1ObservedState.postTradeStateHashes,
+        realizedProfitUsd: req.postC1ObservedState.realizedProfitUsd,
+        executor: req.executor,
+        routeId,
+        c1StateHash: (0, ethers_1.keccak256)(encoded),
+    };
 }
 //# sourceMappingURL=C1Engine.js.map

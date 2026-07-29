@@ -121,7 +121,7 @@ export interface LedgerRecord {
     realizedNetUsd?: string;
     settlementStatus?: SettlementStatus;
 }
-export type RejectionReason = 'STATE_TOO_OLD' | 'QUOTE_EXPIRED' | 'BUY_PRICE_NOT_LOWER_THAN_SELL_PRICE' | 'SAME_POOL' | 'NET_PROFIT_BELOW_MINIMUM' | 'PROFIT_TO_GAS_TOO_LOW' | 'SIMULATION_REVERTED' | 'REPAYMENT_FAILED' | 'PAYLOAD_ABI_MISMATCH' | 'PRIVATE_RELAY_REJECTED' | 'PUBLIC_FALLBACK_DISABLED' | 'KILL_SWITCH_ACTIVE' | 'C2_PARENT_NOT_CONFIRMED' | 'NONCE_CONFLICT';
+export type RejectionReason = 'STATE_TOO_OLD' | 'QUOTE_EXPIRED' | 'BUY_PRICE_NOT_LOWER_THAN_SELL_PRICE' | 'SAME_POOL' | 'NET_PROFIT_BELOW_MINIMUM' | 'PROFIT_TO_GAS_TOO_LOW' | 'SIMULATION_REVERTED' | 'REPAYMENT_FAILED' | 'PAYLOAD_ABI_MISMATCH' | 'PRIVATE_RELAY_REJECTED' | 'PUBLIC_FALLBACK_DISABLED' | 'KILL_SWITCH_ACTIVE' | 'C2_PARENT_NOT_CONFIRMED' | 'NONCE_CONFLICT' | 'C2_DYNAMIC_REUSE_DETECTED' | 'C2_STATE_RELOAD_MISMATCH';
 export type PipelineStage = 'DISCOVERY' | 'QUOTE' | 'SIZE' | 'PROFIT_GATE' | 'SIMULATION' | 'PAYLOAD' | 'SUBMISSION' | 'SETTLEMENT' | 'LEDGER';
 export interface RejectionRecord {
     opportunityId: string;
@@ -258,17 +258,34 @@ export interface OpportunityEvidenceChain {
         c1SimHash?: string;
         c1TxHash?: string;
         c1RealizedNetUsd?: string;
+        c1StateHash?: string;
+        c1StateCommitment?: C1StateCommitment;
     };
     c2?: {
         cycleId: string;
         parentC1TxHash: string;
         postC1StateHash: string;
-        c2Decision: 'MIRROR' | 'REVERSE' | 'NOOP';
+        c2Decision: 'MIRROR' | 'REVERSE' | 'NO_OP';
+        c2MirrorNetProfitUsd?: string;
+        c2ReverseNetProfitUsd?: string;
+        c2MirrorGatesPassed?: boolean;
+        c2ReverseGatesPassed?: boolean;
         c2RouteHash?: string;
         c2SimHash?: string;
         c2TxHash?: string;
         c2RealizedNetUsd?: string;
     };
+}
+export interface C1StateCommitment {
+    chainId: number;
+    blockNumber: number;
+    transactionHash: string;
+    affectedPoolIds: string[];
+    postTradeStateHashes: string[];
+    realizedProfitUsd: string;
+    executor: string;
+    routeId: string;
+    c1StateHash: string;
 }
 /**
  * TxSubmitter is the controlled transaction gateway.

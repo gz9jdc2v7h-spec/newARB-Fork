@@ -1,3 +1,4 @@
+"use strict";
 /**
  * PrivateRelaySubmitter — sends a pre-signed raw transaction to a private relay
  * (e.g. Fastlane, Flashbots, MEV Blocker, BloxRoute).
@@ -8,8 +9,10 @@
  * This path NEVER falls back to public mempool unless the caller explicitly
  * sets publicFallback = true in the ApexTxRequest.
  */
-import { keccak256 } from 'ethers';
-import { ReceiptNormalizer } from '../receipt/ReceiptNormalizer.js';
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.PrivateRelaySubmitter = void 0;
+const ethers_1 = require("ethers");
+const ReceiptNormalizer_js_1 = require("../receipt/ReceiptNormalizer.js");
 /** Relay-provider name → JSON-RPC method (some relays use non-standard names). */
 const RELAY_METHODS = {
     flashbots: 'eth_sendBundle', // simplified; real bundles need extra fields
@@ -18,7 +21,7 @@ const RELAY_METHODS = {
     bloxroute: 'eth_sendRawTransaction',
     default: 'eth_sendRawTransaction',
 };
-export class PrivateRelaySubmitter {
+class PrivateRelaySubmitter {
     endpoint;
     relayName;
     authHeader;
@@ -71,7 +74,7 @@ export class PrivateRelaySubmitter {
         if (relayResponse.error) {
             return this.buildFailedResult(signed, request, `Relay rejected: [${relayResponse.error.code}] ${relayResponse.error.message}`);
         }
-        const txHash = relayResponse.result ?? keccak256(signed.rawTx);
+        const txHash = relayResponse.result ?? (0, ethers_1.keccak256)(signed.rawTx);
         try {
             submittedBlock = await this.fetchCurrentBlock();
         }
@@ -91,7 +94,7 @@ export class PrivateRelaySubmitter {
             submittedBlock,
             expiresAtBlock: request.expiresAtBlock,
             txHash,
-            rawTxHash: keccak256(signed.rawTx),
+            rawTxHash: (0, ethers_1.keccak256)(signed.rawTx),
             payloadHash: request.payloadHash,
             routeHash: request.routeHash,
             stateHash: request.stateHash,
@@ -108,7 +111,7 @@ export class PrivateRelaySubmitter {
         while (Date.now() < deadline) {
             const raw = await this.rpcGetReceipt(rpcUrl, txHash);
             if (raw) {
-                return ReceiptNormalizer.normalize(raw);
+                return ReceiptNormalizer_js_1.ReceiptNormalizer.normalize(raw);
             }
             await sleep(this.pollIntervalMs);
         }
@@ -158,7 +161,7 @@ export class PrivateRelaySubmitter {
             submittedBlock: 0,
             expiresAtBlock: request.expiresAtBlock,
             txHash: '',
-            rawTxHash: keccak256(signed.rawTx),
+            rawTxHash: (0, ethers_1.keccak256)(signed.rawTx),
             payloadHash: request.payloadHash,
             routeHash: request.routeHash,
             stateHash: request.stateHash,
@@ -169,6 +172,7 @@ export class PrivateRelaySubmitter {
         };
     }
 }
+exports.PrivateRelaySubmitter = PrivateRelaySubmitter;
 function sleep(ms) {
     return new Promise((r) => setTimeout(r, ms));
 }

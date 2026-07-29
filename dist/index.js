@@ -1,25 +1,122 @@
-/**
- * apex-tx-submitter — public API barrel
- *
- * ONLY TxSubmitter and the supporting types are the public surface.
- * Internal adapters, relay, nonce, and pipeline details are implementation
- * specifics and are NOT part of the public contract.
- */
-// ── Main implementation ───────────────────────────────────────────────────────
-export { ApexTxSubmitter } from './submitter/ApexTxSubmitter.js';
-// ── Transparency pipeline ─────────────────────────────────────────────────────
-export { AuditLogger, ConsoleSink, MultiSink, buildMinimumEvidence } from './pipeline/transparency/AuditLogger.js';
-export { EvidenceChain } from './pipeline/transparency/EvidenceChain.js';
-// ── C1 / C2 engine hooks ──────────────────────────────────────────────────────
-export { C1Engine, C1_SELECTORS } from './pipeline/c1/C1Engine.js';
-export { C2Engine } from './pipeline/c2/C2Engine.js';
-// ── Adapters (exported for testing / advanced use only) ───────────────────────
-export { EthersV6Adapter } from './adapters/EthersV6Adapter.js';
-export { Web3Adapter } from './adapters/Web3Adapter.js';
-// ── Relay ─────────────────────────────────────────────────────────────────────
-export { PrivateRelaySubmitter } from './relay/PrivateRelaySubmitter.js';
-// ── Nonce ─────────────────────────────────────────────────────────────────────
-export { NonceManager } from './nonce/NonceManager.js';
-// ── Receipt ───────────────────────────────────────────────────────────────────
-export { ReceiptNormalizer } from './receipt/ReceiptNormalizer.js';
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+require("dotenv/config");
+const ethers_1 = require("ethers");
+const config_1 = require("./config");
+const OpportunityScanner_1 = require("./discovery/OpportunityScanner");
+const OpportunityRanker_1 = require("./ranking/OpportunityRanker");
+const Executor_1 = require("./execution/Executor");
+const logger_1 = require("./utils/logger");
+const helpers_1 = require("./utils/helpers");
+// ─── Provider setup ───────────────────────────────────────────────────────────
+async function createHttpProvider() {
+    let lastErr;
+    for (const url of config_1.RPC_HTTP_CANDIDATES) {
+        try {
+            const p = new ethers_1.ethers.JsonRpcProvider(url, config_1.CHAIN_ID);
+            const network = await p.getNetwork();
+            if (network.chainId !== BigInt(config_1.CHAIN_ID)) {
+                throw new Error(`Endpoint ${url} is chain ${network.chainId}, expected ${config_1.CHAIN_ID}`);
+            }
+            logger_1.logger.info("HTTP provider selected", { url });
+            return p;
+        }
+        catch (err) {
+            lastErr = err;
+            logger_1.logger.warn("HTTP endpoint unavailable", { url, err: String(err) });
+        }
+    }
+    throw new Error(`No reachable HTTP Polygon endpoint. Last error: ${String(lastErr)}`);
+}
+async function createWsProvider() {
+    for (const url of config_1.RPC_WS_CANDIDATES) {
+        try {
+            const p = new ethers_1.ethers.WebSocketProvider(url, config_1.CHAIN_ID);
+            const block = await p.getBlockNumber();
+            logger_1.logger.info("WebSocket provider selected", { url, block });
+            return p;
+        }
+        catch (err) {
+            logger_1.logger.warn("WebSocket endpoint unavailable", { url, err: String(err) });
+        }
+    }
+    logger_1.logger.warn("No reachable WebSocket endpoint — will use HTTP polling");
+    return null;
+}
+// ─── Main loop ────────────────────────────────────────────────────────────────
+async function main() {
+    logger_1.logger.info("=== Polygon ARB Bot starting ===");
+    const httpProvider = await createHttpProvider();
+    const wsProvider = await createWsProvider();
+    // Verify network
+    const network = await httpProvider.getNetwork();
+    if (network.chainId !== BigInt(config_1.CHAIN_ID)) {
+        throw new Error(`Wrong network: expected chain ${config_1.CHAIN_ID}, got ${network.chainId}`);
+    }
+    logger_1.logger.info(`Connected to chain ${network.chainId} (${network.name})`);
+    const ranker = new OpportunityRanker_1.OpportunityRanker(httpProvider);
+    // Only create executor when PRIVATE_KEY is set
+    let executor = null;
+    if (process.env["PRIVATE_KEY"]) {
+        executor = new Executor_1.Executor(httpProvider);
+        logger_1.logger.info("Executor initialised — LIVE execution enabled");
+    }
+    else {
+        logger_1.logger.warn("PRIVATE_KEY not set — running in DRY-RUN mode (discovery + ranking only)");
+    }
+    // Debounce: ensure we don't process overlapping snapshots
+    let processing = false;
+    const handleSnapshot = async (snapshot) => {
+        if (processing) {
+            logger_1.logger.debug("Skipping snapshot — previous still processing");
+            return;
+        }
+        processing = true;
+        try {
+            const opportunities = await ranker.rank(snapshot);
+            if (opportunities.length === 0) {
+                logger_1.logger.debug("No profitable opportunities found");
+                return;
+            }
+            const best = opportunities[0];
+            logger_1.logger.info("Best opportunity", {
+                label: best.label,
+                grossUsd: best.grossProfitUsd.toFixed(2),
+                gasUsd: best.gasCostUsd.toFixed(2),
+                netUsd: best.netProfitUsd.toFixed(2),
+                score: best.score.toFixed(2),
+            });
+            if (executor) {
+                await executor.execute(best);
+            }
+        }
+        finally {
+            processing = false;
+        }
+    };
+    const scanner = new OpportunityScanner_1.OpportunityScanner(httpProvider, wsProvider, handleSnapshot);
+    scanner.start();
+    // Keep alive — handle graceful shutdown
+    const shutdown = async () => {
+        logger_1.logger.info("Shutting down...");
+        scanner.stop();
+        if (wsProvider) {
+            await wsProvider.destroy();
+        }
+        process.exit(0);
+    };
+    process.on("SIGINT", shutdown);
+    process.on("SIGTERM", shutdown);
+    // In dry-run mode without WebSocket, the polling loop in OpportunityScanner
+    // keeps the process alive. With WebSocket subscriptions the event listener
+    // keeps the process alive. Either way we block here.
+    while (true) {
+        await (0, helpers_1.sleep)(60_000);
+        logger_1.logger.debug("Heartbeat — bot is running");
+    }
+}
+main().catch((err) => {
+    logger_1.logger.error("Fatal error", { err: String(err) });
+    process.exit(1);
+});
 //# sourceMappingURL=index.js.map
