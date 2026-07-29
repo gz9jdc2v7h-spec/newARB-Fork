@@ -37,17 +37,24 @@ const DEFAULT_AMOUNT_IN_WETH = ethers.parseEther("1");
 const BALANCER_POOL_REGISTERED_TOPIC = ethers.id(
   "PoolRegistered(bytes32,address,uint8)"
 );
-const BALANCER_DISCOVERY_FROM_BLOCK = Math.max(
-  1,
-  parseInt(process.env["BALANCER_DISCOVERY_FROM_BLOCK"] ?? "1", 10) || 1
+
+function positiveIntEnv(key: string, fallback: number): number {
+  const parsed = parseInt(process.env[key] ?? "", 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return parsed;
+}
+
+const BALANCER_DISCOVERY_FROM_BLOCK = positiveIntEnv(
+  "BALANCER_DISCOVERY_FROM_BLOCK",
+  1
 );
-const BALANCER_DISCOVERY_STEP = Math.max(
-  1,
-  parseInt(process.env["BALANCER_DISCOVERY_STEP"] ?? "200000", 10) || 200000
+const BALANCER_DISCOVERY_STEP = positiveIntEnv(
+  "BALANCER_DISCOVERY_STEP",
+  200000
 );
-const BALANCER_DISCOVERY_CONCURRENCY = Math.max(
-  1,
-  parseInt(process.env["BALANCER_DISCOVERY_CONCURRENCY"] ?? "16", 10) || 16
+const BALANCER_DISCOVERY_CONCURRENCY = positiveIntEnv(
+  "BALANCER_DISCOVERY_CONCURRENCY",
+  16
 );
 
 const balancerPairPoolCache = new Map<string, Promise<string[]>>();
@@ -313,7 +320,7 @@ async function quoteBalancer(
       );
 
       if (deltas.length < 2) continue;
-      const amountOut = deltas[1] < 0n ? -deltas[1] : 0n;
+      const amountOut = deltas[1] < 0n ? -deltas[1] : deltas[1];
       if (amountOut <= 0n) continue;
 
       const price =
