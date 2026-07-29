@@ -244,17 +244,33 @@ interface ComputeC1StateHashParams {
 export function computeC1StateHash(params: ComputeC1StateHashParams): C1StateCommitment {
   const { chainId, blockNumber, transactionHash, receipt, executor, routeId, realizedProfit } = params;
 
+  const abiCoder = AbiCoder.defaultAbiCoder();
+
   // Deduplicated set of pool addresses touched in the receipt logs
   const affectedPoolIds = [...new Set(receipt.logs.map((l) => l.address.toLowerCase()))];
 
-  // Per-pool post-trade state hash: hash of each unique log grouped by address
+  // Per-pool post-trade state hash: ABI-encode each pool's logs deterministically
   const postTradeStateHashes = affectedPoolIds.map((poolAddress) => {
-    const poolLogs = receipt.logs.filter((l) => l.address.toLowerCase() === poolAddress);
-    return keccak256(toUtf8Bytes(JSON.stringify(poolLogs)));
+    const poolLogs = receipt.logs
+      .filter((l) => l.address.toLowerCase() === poolAddress)
+      .sort((a, b) => a.logIndex - b.logIndex);
+
+    // ABI-encode log fields in a fixed order for determinism across environments
+    const encodedLogs = abiCoder.encode(
+      ['tuple(address address, bytes32[] topics, bytes data, uint256 logIndex)[]'],
+      [
+        poolLogs.map((l) => ({
+          address: l.address,
+          topics: l.topics,
+          data: l.data,
+          logIndex: l.logIndex,
+        })),
+      ],
+    );
+    return keccak256(encodedLogs);
   });
 
   // ABI-encode all fields for a fully typed, deterministic commitment
-  const abiCoder = AbiCoder.defaultAbiCoder();
   const encoded = abiCoder.encode(
     ['uint256', 'uint256', 'bytes32', 'address[]', 'bytes32[]', 'string', 'address', 'bytes32'],
     [

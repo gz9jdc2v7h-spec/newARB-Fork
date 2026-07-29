@@ -7,7 +7,7 @@
 
 // ─── Core submission pipeline ────────────────────────────────────────────────
 
-export type CycleType = 'C1' | 'C2';
+export type CycleType = 'C1' | 'C2' | 'LIQUIDATION';
 export type SubmitterAdapter = 'ethers_v6' | 'web3' | 'private_relay';
 export type SubmissionStatus =
   | 'SUBMITTED_PRIVATE'
@@ -359,7 +359,7 @@ export interface OpportunityEvidenceChain {
     cycleId: string;
     parentC1TxHash: string;
     postC1StateHash: string;
-    c2Decision: 'MIRROR' | 'REVERSE' | 'NOOP';
+    c2Decision: 'MIRROR' | 'REVERSE' | 'NO_OP';
     c2RouteHash?: string;
     c2SimHash?: string;
     c2TxHash?: string;
@@ -448,7 +448,7 @@ export interface C2DecisionOutput {
   rationale: string;
 }
 
-export type C2Decision = 'MIRROR' | 'REVERSE' | 'NOOP';
+export type C2Decision = 'MIRROR' | 'REVERSE' | 'NO_OP';
 
 // ─── Liquidation execution lane ──────────────────────────────────────────────
 

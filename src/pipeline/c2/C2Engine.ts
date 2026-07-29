@@ -1,18 +1,18 @@
 /**
- * C2Engine — hooks for the C2 (second-cycle) MIRROR / REVERSE / NOOP path.
+ * C2Engine — hooks for the C2 (second-cycle) MIRROR / REVERSE / NO_OP path.
  *
  * C2 INVARIANTS:
  *  1. C2 NEVER submits before the parent C1 receipt is confirmed.
  *  2. Post-C1 state is always reloaded before C2 sizing.
  *  3. C2 is only valid in blocks N+1 to N+5 relative to C1 confirmation.
  *  4. C2 profit is written separately — never merged with C1.
- *  5. NOOP is a valid and explicitly logged outcome.
+ *  5. NO_OP is a valid and explicitly logged outcome.
  *
  * Flow:
  *   1. Assert parent C1 is CONFIRMED (receiptStatus === true)
  *   2. Reload post-C1 pool state
- *   3. Evaluate MIRROR / REVERSE / NOOP
- *   4. If NOOP → log and return
+ *   3. Evaluate MIRROR / REVERSE / NO_OP
+ *   4. If NO_OP → log and return
  *   5. Request fresh nonce
  *   6. sign() → submit() via TxSubmitter
  *   7. wait() for NormalizedReceipt
@@ -166,8 +166,8 @@ export class C2Engine {
       };
     }
 
-    // ── Invariant 3: NOOP is valid — log and return ────────────────────────────
-    if (req.c2Decision === 'NOOP') {
+    // ── Invariant 3: NO_OP is valid — log and return ────────────────────────────
+    if (req.c2Decision === 'NO_OP') {
       this.logger.logRejection({
         opportunityId: req.opportunityId,
         stage: 'PROFIT_GATE',
@@ -176,12 +176,12 @@ export class C2Engine {
         configVersion: req.config.configVersion,
         stateHash: postC1StateHash,
         routeHash: c2RouteHash,
-        detail: 'C2 decision: NOOP — no profitable continuation found',
+        detail: 'C2 decision: NO_OP — no profitable continuation found',
         timestamp: Date.now(),
       });
       return {
         cycleId: req.cycleId,
-        decision: 'NOOP',
+        decision: 'NO_OP',
         skipped: true,
         evidenceChain: chain,
       };

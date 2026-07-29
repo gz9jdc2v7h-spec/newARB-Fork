@@ -113,7 +113,7 @@ export class LiquidationEngine {
 
     const txRequest: ApexTxRequest = {
       opportunityId,
-      cycleType: 'C1',          // Liquidation is a standalone first-cycle call
+      cycleType: 'LIQUIDATION',
       cycleId: req.cycleId,
       chainId: req.state.chainId,
       blockNumber: req.state.blockNumber,
@@ -144,7 +144,7 @@ export class LiquidationEngine {
 
     const ledgerRecord: LedgerRecord = {
       opportunityId,
-      cycleType: 'C1',
+      cycleType: 'LIQUIDATION',
       cycleId: req.cycleId,
       submitterAdapter: submission.submitterAdapter,
       nonce: submission.nonce,

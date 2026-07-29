@@ -89,7 +89,7 @@ export class C2DecisionEngine {
 
 function noOp(rationale: string): C2DecisionOutput {
   return {
-    decision: 'NOOP',
+    decision: 'NO_OP',
     selectedNetProfitUsd: 0,
     selectedRouteHash: null,
     rationale,
