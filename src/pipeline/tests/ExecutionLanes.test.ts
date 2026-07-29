@@ -1,12 +1,13 @@
-import { C1Engine } from '../c1/C1Engine.js';
-import { C2Engine } from '../c2/C2Engine.js';
+import { C1Engine } from '../c1/C1Engine';
+import { C2Engine } from '../c2/C2Engine';
 import type {
   ApexTxRequest,
   BuiltTx,
   NormalizedReceipt,
   SignedTx,
+  SubmissionResult,
   TxSubmitter,
-} from '../../types/index.js';
+} from '../../types/index';
 
 class FakeSubmitter implements TxSubmitter {
   async build(request: ApexTxRequest): Promise<BuiltTx> {
@@ -33,11 +34,12 @@ class FakeSubmitter implements TxSubmitter {
     };
   }
 
-  async submit(signed: SignedTx) {
+  async submit(signed: SignedTx): Promise<SubmissionResult> {
+    const cycleType = signed.cycleId.startsWith('c2') ? 'C2' : 'C1';
     return {
       opportunityId: signed.opportunityId,
       cycleId: signed.cycleId,
-      cycleType: signed.cycleId.startsWith('c2') ? 'C2' : 'C1',
+      cycleType,
       submitterAdapter: 'ethers_v6' as const,
       nonce: signed.nonce,
       gasLimit: signed.gasLimit.toString(),
