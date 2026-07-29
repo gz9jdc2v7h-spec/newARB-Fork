@@ -104,10 +104,11 @@ The discovery layer is responsible for building a fresh market snapshot across c
 
 **Current configured discovery universe**
 
-- **DEXes**
+- **DEXes with active quote paths described in this README**
   - Uniswap V3
   - SushiSwap V2
   - QuickSwap V2
+- **DEX configured in the repo but not yet presented here as a fully active quote path**
   - Balancer V2
 - **Tokens**
   - WMATIC
@@ -539,7 +540,7 @@ python -m pytest python/tests/test_scanner.py
 
 ## Configuration reference
 
-| Variable | Default | Role |
+| Variable | Default / status | Role |
 |---|---|---|
 | `POLYGON_RPC_HTTP` | `https://polygon-rpc.com` | primary HTTP RPC |
 | `POLYGON_RPC_HTTP_FALLBACK` | `https://polygon-bor-rpc.publicnode.com` | fallback HTTP RPC |
