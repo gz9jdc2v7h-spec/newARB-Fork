@@ -141,6 +141,8 @@ export interface DexConfig {
   vault?: string;         // Balancer
   feeTiers?: number[];    // UniV3 (in bps * 100, e.g. 3000 = 0.3%)
   defaultFee?: number;    // UniV2 fee (e.g. 3000 = 0.3%)
+  /** Balancer V2: known pool IDs to query. Token symbols must match TOKENS keys. */
+  pools?: Array<{ poolId: string; tokens: string[] }>;
 }
 
 export const DEXES: DexConfig[] = [
@@ -175,6 +177,28 @@ export const DEXES: DexConfig[] = [
     type: "Balancer",
     vault: "0xBA12222222228d8Ba445958a75a0704d566BF2C8",
     router: "0xBA12222222228d8Ba445958a75a0704d566BF2C8",
+    pools: [
+      // WMATIC / WETH 80/20 weighted
+      {
+        poolId: "0x0297e37f1873d2dab4487aa67cd56b58e2f27875000200000000000000000002",
+        tokens: ["WMATIC", "WETH"],
+      },
+      // WBTC / WETH 50/50 weighted
+      {
+        poolId: "0xfeadd389a5c427952d8fdb8057d6c8ba1156cc56000200000000000000000049",
+        tokens: ["WBTC", "WETH"],
+      },
+      // WMATIC / USDC / WETH 3-token weighted (pool 0x03cd…)
+      {
+        poolId: "0x03cd191f589d12b0582a99808cf19851e468e6b500010000000000000000000a",
+        tokens: ["WMATIC", "USDC", "WETH"],
+      },
+      // USDC / DAI / USDT ComposableStableSwap
+      {
+        poolId: "0x06df3b2bbb68adc8b0e468d33c17349c2c87b84e000000000000000000000012",
+        tokens: ["USDC", "DAI", "USDT"],
+      },
+    ],
   },
 ];
 

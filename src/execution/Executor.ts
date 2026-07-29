@@ -3,11 +3,12 @@ import { ArbitrageOpportunity } from "../ranking/OpportunityRanker";
 import { getGasData } from "../ranking/GasEstimator";
 import { withRetry, deadline, toFloat } from "../utils/helpers";
 import { logger } from "../utils/logger";
-import { TOKENS, getWallet, MAX_SLIPPAGE, DEXES } from "../config";
+import { TOKENS, getWallet, MAX_SLIPPAGE, DEXES, AAVE_POOL } from "../config";
 import {
   UNIV2_ROUTER_ABI,
   UNIV3_ROUTER_ABI,
   ERC20_ABI,
+  AAVE_POOL_ABI,
 } from "../discovery/abis";
 import { RuntimeEventStream } from "../runtime/RuntimeEventStream";
 
@@ -285,6 +286,160 @@ export class Executor {
       return true;
     } catch (err) {
       logger.error("Execution failed", { label, err: String(err) });
+      recordFailure();
+      return false;
+    }
+  }
+
+  /**
+   * Executes an arbitrage opportunity atomically via an Aave V3 flash loan.
+   *
+   * The flash loan borrows `tradeAmountIn` of tokenIn, passes encoded swap
+   * instructions to a deployed FlashLoanExecutor contract via the `params`
+   * argument, which then performs both swap legs inside `executeOperation()`
+   * and repays the loan + fee in a single transaction.
+   *
+   * SCAFFOLD: Requires FLASH_EXECUTOR_ADDRESS to be set in the environment.
+   * The FlashLoanExecutor contract must implement IFlashLoanSimpleReceiver
+   * and decode the params struct below.
+   *
+   * Params ABI type (decoded by the receiver):
+   *   tuple(
+   *     address tokenIn,
+   *     address tokenOut,
+   *     address buyRouter,
+   *     address sellRouter,
+   *     uint256 amountIn,
+   *     uint256 minOut1,
+   *     uint256 minOut2,
+   *     uint8   buyRouterType,   // 0 = UniV2, 1 = UniV3
+   *     uint8   sellRouterType,  // 0 = UniV2, 1 = UniV3
+   *     uint24  buyFee,
+   *     uint24  sellFee
+   *   )
+   */
+  async executeAtomic(opportunity: ArbitrageOpportunity): Promise<boolean> {
+    const flashExecutorAddr = process.env["FLASH_EXECUTOR_ADDRESS"];
+    if (!flashExecutorAddr) {
+      logger.warn(
+        "FLASH_EXECUTOR_ADDRESS not configured — atomic execution unavailable"
+      );
+      return false;
+    }
+
+    if (!checkCircuitBreaker()) {
+      logger.warn("Circuit breaker OPEN — skipping atomic execution");
+      return false;
+    }
+
+    const { buyQuote, sellQuote, tradeAmountIn, label } = opportunity;
+    logger.info("Executing atomic flash opportunity", {
+      label,
+      netProfitUsd: opportunity.netProfitUsd.toFixed(2),
+    });
+
+    try {
+      const gasData = await getGasData(this.provider);
+
+      const tokenInCfg = TOKENS[buyQuote.tokenIn]!;
+      const tokenOutCfg = TOKENS[buyQuote.tokenOut]!;
+      const slippageFactor = 1 - MAX_SLIPPAGE;
+
+      const buyDexCfg = DEXES.find((d) => d.name === buyQuote.dex)!;
+      const sellDexCfg = DEXES.find((d) => d.name === sellQuote.dex)!;
+
+      // Router type flag: 0 = UniV2, 1 = UniV3
+      const buyRouterType = buyDexCfg.type === "UniV3" ? 1 : 0;
+      const sellRouterType = sellDexCfg.type === "UniV3" ? 1 : 0;
+
+      // Use the first configured fee tier, falling back to the UniV2 default
+      const buyFee = buyDexCfg.feeTiers?.[0] ?? buyDexCfg.defaultFee ?? 3000;
+      const sellFee = sellDexCfg.feeTiers?.[0] ?? sellDexCfg.defaultFee ?? 3000;
+
+      const minOut1 = BigInt(
+        Math.floor(Number(buyQuote.amountOut) * slippageFactor)
+      );
+      const minOut2 = BigInt(
+        Math.floor(Number(sellQuote.amountOut) * slippageFactor)
+      );
+
+      // Encode the two-leg swap instructions for the FlashLoanExecutor callback
+      const abiCoder = ethers.AbiCoder.defaultAbiCoder();
+      const flashLoanParams = abiCoder.encode(
+        [
+          "tuple(address tokenIn, address tokenOut, address buyRouter, address sellRouter, uint256 amountIn, uint256 minOut1, uint256 minOut2, uint8 buyRouterType, uint8 sellRouterType, uint24 buyFee, uint24 sellFee)",
+        ],
+        [
+          {
+            tokenIn: tokenInCfg.address,
+            tokenOut: tokenOutCfg.address,
+            buyRouter: buyDexCfg.router,
+            sellRouter: sellDexCfg.router,
+            amountIn: tradeAmountIn,
+            minOut1,
+            minOut2,
+            buyRouterType,
+            sellRouterType,
+            buyFee,
+            sellFee,
+          },
+        ]
+      );
+
+      const aavePool = new ethers.Contract(AAVE_POOL, AAVE_POOL_ABI, this.wallet);
+      const tx: ethers.TransactionResponse = await aavePool.flashLoan(
+        flashExecutorAddr,         // receiver — our FlashLoanExecutor contract
+        [tokenInCfg.address],      // assets to borrow
+        [tradeAmountIn],           // amounts
+        [0],                       // 0 = no open debt (standard flash loan)
+        flashExecutorAddr,         // onBehalfOf
+        flashLoanParams,           // encoded swap instructions
+        0,                         // referralCode
+        {
+          maxFeePerGas: gasData.maxFeePerGas,
+          maxPriorityFeePerGas: gasData.maxPriorityFee,
+        }
+      );
+
+      logger.info("Atomic flash loan submitted", { hash: tx.hash });
+      this.eventStream?.publishHealth(
+        "execution",
+        "ok",
+        `Flash loan submitted: ${tx.hash}`,
+        "executor"
+      );
+
+      const receipt = await tx.wait(1);
+      if (!receipt || receipt.status !== 1) {
+        throw new Error(`Atomic execution reverted: ${tx.hash}`);
+      }
+
+      logger.info("Atomic execution confirmed", {
+        hash: receipt.hash,
+        gas: receipt.gasUsed.toString(),
+      });
+      this.eventStream?.publishReceipt(
+        {
+          txHash: receipt.hash,
+          receiptStatus: receipt.status === 1,
+          confirmedBlock: receipt.blockNumber,
+          gasUsed: receipt.gasUsed.toString(),
+          rawReceipt: {},
+          effectiveGasPrice: receipt.gasPrice?.toString() ?? "0",
+          gasCostWei: (
+            (receipt.gasPrice ?? 0n) * receipt.gasUsed
+          ).toString(),
+          from: receipt.from,
+          to: receipt.to ?? "",
+          logs: [],
+        },
+        "executor"
+      );
+
+      recordSuccess();
+      return true;
+    } catch (err) {
+      logger.error("Atomic execution failed", { label, err: String(err) });
       recordFailure();
       return false;
     }

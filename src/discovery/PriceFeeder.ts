@@ -1,7 +1,8 @@
 import { ethers } from "ethers";
 import { DexConfig, TOKENS } from "../config";
 import { withRetry, toFloat } from "../utils/helpers";
-import { UNIV2_FACTORY_ABI, UNIV2_PAIR_ABI, UNIV3_QUOTER_V2_ABI } from "./abis";
+import { UNIV2_FACTORY_ABI, UNIV2_PAIR_ABI, UNIV3_QUOTER_V2_ABI, BALANCER_VAULT_ABI } from "./abis";
+import { logger } from "../utils/logger";
 
 export interface PriceQuote {
   dex: string;
@@ -150,6 +151,105 @@ async function quoteUniV3(
   return best;
 }
 
+// ─── Balancer V2 quote ────────────────────────────────────────────────────────
+
+/**
+ * Queries the Balancer V2 Vault for a GIVEN_IN swap quote across all
+ * configured pools that contain both tokenIn and tokenOut.
+ *
+ * Uses queryBatchSwap via staticCall so no transaction is sent.
+ * Returns the best (highest amountOut) quote found across eligible pools.
+ */
+async function quoteBalancer(
+  provider: ethers.Provider,
+  dex: DexConfig,
+  tokenInSym: string,
+  tokenOutSym: string,
+  amountIn: bigint
+): Promise<PriceQuote | null> {
+  if (!dex.vault || !dex.pools || dex.pools.length === 0) return null;
+
+  const tokenIn = token(tokenInSym);
+  const tokenOut = token(tokenOutSym);
+  const vault = new ethers.Contract(dex.vault, BALANCER_VAULT_ABI, provider);
+
+  // Only consider pools that are declared to contain both tokens
+  const eligiblePools = dex.pools.filter(
+    (p) => p.tokens.includes(tokenInSym) && p.tokens.includes(tokenOutSym)
+  );
+  if (eligiblePools.length === 0) return null;
+
+  let best: PriceQuote | null = null;
+
+  for (const pool of eligiblePools) {
+    try {
+      // Fetch the canonical token ordering from the vault (authoritative sort)
+      const [poolTokens]: [string[], bigint[], number] = await withRetry(() =>
+        vault.getPoolTokens(pool.poolId)
+      );
+
+      const tokenInIdx = poolTokens.findIndex(
+        (t) => t.toLowerCase() === tokenIn.address.toLowerCase()
+      );
+      const tokenOutIdx = poolTokens.findIndex(
+        (t) => t.toLowerCase() === tokenOut.address.toLowerCase()
+      );
+      if (tokenInIdx === -1 || tokenOutIdx === -1) continue;
+
+      // GIVEN_IN = 0: we specify amountIn and ask how much comes out
+      const swaps = [
+        {
+          poolId: pool.poolId,
+          assetInIndex: tokenInIdx,
+          assetOutIndex: tokenOutIdx,
+          amount: amountIn,
+          userData: "0x",
+        },
+      ];
+      const funds = {
+        sender: ethers.ZeroAddress,
+        fromInternalBalance: false,
+        recipient: ethers.ZeroAddress,
+        toInternalBalance: false,
+      };
+
+      // queryBatchSwap is nonpayable but safe to staticCall for simulation
+      const deltas: bigint[] = await withRetry(() =>
+        vault.queryBatchSwap.staticCall(0, swaps, poolTokens, funds)
+      );
+
+      // Positive delta = vault receives, negative delta = vault pays out
+      const delta = deltas[tokenOutIdx];
+      if (delta === undefined || delta >= 0n) continue;
+      const amountOut = -delta;
+      if (amountOut === 0n) continue;
+
+      const price =
+        toFloat(amountOut, tokenOut.decimals) /
+        toFloat(amountIn, tokenIn.decimals);
+
+      if (!best || amountOut > best.amountOut) {
+        best = {
+          dex: dex.name,
+          invariantFamily: "Weighted",
+          quoteSource: "quoter",
+          tokenIn: tokenInSym,
+          tokenOut: tokenOutSym,
+          amountIn,
+          amountOut,
+          price,
+          gasEstimate: 130_000n, // typical Balancer single-hop swap gas
+          timestamp: Date.now(),
+        };
+      }
+    } catch (err) {
+      logger.debug("Balancer quote failed", { pool: pool.poolId, err: String(err) });
+    }
+  }
+
+  return best;
+}
+
 // ─── Public API ──────────────────────────────────────────────────────────────
 
 /**
@@ -175,6 +275,8 @@ export async function fetchQuote(
   if (dex.type === "UniV3") {
     return quoteUniV3(provider, dex, tokenInSym, tokenOutSym, _amountIn);
   }
-  // Balancer: skip for now (requires on-chain query for poolId)
+  if (dex.type === "Balancer") {
+    return quoteBalancer(provider, dex, tokenInSym, tokenOutSym, _amountIn);
+  }
   return null;
 }

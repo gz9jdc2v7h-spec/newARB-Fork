@@ -119,3 +119,94 @@ export const AAVE_POOL_ABI = [
     type: "function",
   },
 ] as const;
+
+// ─── Balancer V2 Vault ────────────────────────────────────────────────────────
+
+export const BALANCER_VAULT_ABI = [
+  // Read pool token list and balances (used to resolve asset indices for quotes)
+  {
+    inputs: [{ internalType: "bytes32", name: "poolId", type: "bytes32" }],
+    name: "getPoolTokens",
+    outputs: [
+      { internalType: "address[]", name: "tokens", type: "address[]" },
+      { internalType: "uint256[]", name: "balances", type: "uint256[]" },
+      { internalType: "uint256", name: "lastChangeBlock", type: "uint256" },
+    ],
+    stateMutability: "view",
+    type: "function",
+  },
+  // Simulate a batch swap without state changes — call via staticCall
+  {
+    inputs: [
+      { internalType: "uint8", name: "kind", type: "uint8" },
+      {
+        components: [
+          { internalType: "bytes32", name: "poolId", type: "bytes32" },
+          { internalType: "uint256", name: "assetInIndex", type: "uint256" },
+          { internalType: "uint256", name: "assetOutIndex", type: "uint256" },
+          { internalType: "uint256", name: "amount", type: "uint256" },
+          { internalType: "bytes", name: "userData", type: "bytes" },
+        ],
+        internalType: "struct IVault.BatchSwapStep[]",
+        name: "swaps",
+        type: "tuple[]",
+      },
+      { internalType: "address[]", name: "assets", type: "address[]" },
+      {
+        components: [
+          { internalType: "address", name: "sender", type: "address" },
+          { internalType: "bool", name: "fromInternalBalance", type: "bool" },
+          { internalType: "address payable", name: "recipient", type: "address" },
+          { internalType: "bool", name: "toInternalBalance", type: "bool" },
+        ],
+        internalType: "struct IVault.FundManagement",
+        name: "funds",
+        type: "tuple",
+      },
+    ],
+    name: "queryBatchSwap",
+    outputs: [
+      { internalType: "int256[]", name: "assetDeltas", type: "int256[]" },
+    ],
+    stateMutability: "nonpayable",
+    type: "function",
+  },
+  // Execute a batch swap (used in atomic execution path)
+  {
+    inputs: [
+      { internalType: "uint8", name: "kind", type: "uint8" },
+      {
+        components: [
+          { internalType: "bytes32", name: "poolId", type: "bytes32" },
+          { internalType: "uint256", name: "assetInIndex", type: "uint256" },
+          { internalType: "uint256", name: "assetOutIndex", type: "uint256" },
+          { internalType: "uint256", name: "amount", type: "uint256" },
+          { internalType: "bytes", name: "userData", type: "bytes" },
+        ],
+        internalType: "struct IVault.BatchSwapStep[]",
+        name: "swaps",
+        type: "tuple[]",
+      },
+      { internalType: "address[]", name: "assets", type: "address[]" },
+      {
+        components: [
+          { internalType: "address", name: "sender", type: "address" },
+          { internalType: "bool", name: "fromInternalBalance", type: "bool" },
+          { internalType: "address payable", name: "recipient", type: "address" },
+          { internalType: "bool", name: "toInternalBalance", type: "bool" },
+        ],
+        internalType: "struct IVault.FundManagement",
+        name: "funds",
+        type: "tuple",
+      },
+      { internalType: "int256[]", name: "limits", type: "int256[]" },
+      { internalType: "uint256", name: "deadline", type: "uint256" },
+    ],
+    name: "batchSwap",
+    outputs: [
+      { internalType: "int256[]", name: "assetDeltas", type: "int256[]" },
+    ],
+    stateMutability: "payable",
+    type: "function",
+  },
+] as const;

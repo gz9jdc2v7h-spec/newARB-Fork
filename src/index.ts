@@ -124,14 +124,18 @@ async function main(): Promise<void> {
           requiresFlashLoan: best.routeKind === "multi_hop",
           quoteAgeMs: best.quoteAgeMs,
           supportsPrivateRelay: true,
-          supportsAtomicFlash: false,
+          supportsAtomicFlash: Boolean(process.env["FLASH_EXECUTOR_ADDRESS"]),
           expectedNetProfitUsd: best.netProfitUsd,
           riskFlags: risk.flags,
         });
         logger.info("Execution decision", decision);
-        if (decision.shouldExecute && decision.mode === "sequential_live") {
-          await executor.execute(best);
-        } else if (!decision.shouldExecute) {
+        if (decision.shouldExecute) {
+          if (decision.mode === "atomic_flash") {
+            await executor.executeAtomic(best);
+          } else if (decision.mode === "sequential_live") {
+            await executor.execute(best);
+          }
+        } else {
           eventStream.publishHealth(
             "risk",
             "paused",
