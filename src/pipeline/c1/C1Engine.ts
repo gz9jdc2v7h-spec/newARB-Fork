@@ -14,9 +14,10 @@
  *   7. Emit LedgerRecord
  */
 
-import { keccak256, toUtf8Bytes } from 'ethers';
+import { AbiCoder, keccak256, toUtf8Bytes } from 'ethers';
 import type {
   ApexTxRequest,
+  C1StateCommitment,
   ConfigRecord,
   LedgerRecord,
   NormalizedReceipt,
@@ -64,6 +65,12 @@ export interface C1ExecutionRequest {
   payloadHash: string;
   stateHash: string;
   simulationHash?: string;
+  postC1ObservedState: {
+    affectedPoolIds: string[];
+    postTradeStateHashes: string[];
+    realizedProfitUsd: string;
+    routeId?: string;
+  };
 }
 
 // ── C1 execution result ───────────────────────────────────────────────────────
@@ -73,6 +80,7 @@ export interface C1ExecutionResult {
   submission: SubmissionResult;
   receipt: NormalizedReceipt;
   ledgerRecord: LedgerRecord;
+  c1StateCommitment: C1StateCommitment;
   evidenceChain: EvidenceChain;
 }
 
@@ -139,6 +147,7 @@ export class C1Engine {
     // 5. Wait for receipt
     const receipt = await this.submitter.wait(submission.txHash);
     this.logger.logReceipt(req.opportunityId, receipt);
+    const c1StateCommitment = buildC1StateCommitment(req, receipt, submission.txHash);
 
     // 6. Build ledger record
     const ledgerRecord: LedgerRecord = {
@@ -166,9 +175,19 @@ export class C1Engine {
       c1RouteHash: routeHash,
       c1SimHash: req.simulationHash,
       c1TxHash: submission.txHash,
+      c1RealizedNetUsd: req.postC1ObservedState.realizedProfitUsd,
+      c1StateHash: c1StateCommitment.c1StateHash,
+      c1StateCommitment,
     });
 
-    return { cycleId: req.cycleId, submission, receipt, ledgerRecord, evidenceChain: chain };
+    return {
+      cycleId: req.cycleId,
+      submission,
+      receipt,
+      ledgerRecord,
+      c1StateCommitment,
+      evidenceChain: chain,
+    };
   }
 }
 
@@ -186,4 +205,37 @@ function encodeC1Calldata(req: C1ExecutionRequest): string {
     [req.borrowAsset, req.borrowAmount, req.encodedRoutePayload],
   );
   return selector + encoded.slice(2); // strip 0x from ABI body
+}
+
+export function buildC1StateCommitment(
+  req: C1ExecutionRequest,
+  receipt: NormalizedReceipt,
+  txHash: string,
+): C1StateCommitment {
+  const routeId = req.postC1ObservedState.routeId ?? req.route.routeHash;
+  const encoded = AbiCoder.defaultAbiCoder().encode(
+    ['uint256', 'uint256', 'bytes32', 'string[]', 'bytes32[]', 'string', 'address', 'string'],
+    [
+      req.state.chainId,
+      receipt.confirmedBlock,
+      txHash,
+      req.postC1ObservedState.affectedPoolIds,
+      req.postC1ObservedState.postTradeStateHashes,
+      req.postC1ObservedState.realizedProfitUsd,
+      req.executor,
+      routeId,
+    ],
+  );
+
+  return {
+    chainId: req.state.chainId,
+    blockNumber: receipt.confirmedBlock,
+    transactionHash: txHash,
+    affectedPoolIds: req.postC1ObservedState.affectedPoolIds,
+    postTradeStateHashes: req.postC1ObservedState.postTradeStateHashes,
+    realizedProfitUsd: req.postC1ObservedState.realizedProfitUsd,
+    executor: req.executor,
+    routeId,
+    c1StateHash: keccak256(encoded),
+  };
 }
