@@ -60,7 +60,7 @@ class ApexTxSubmitter {
     async sign(request) {
         const signed = await this.ethersAdapter.sign(request);
         const cacheKey = (0, ethers_1.keccak256)(signed.rawTx);
-        this.evictCachedRequest(cacheKey);
+        this.ensureCacheCapacityFor(cacheKey);
         this.signedRequestCache.set(cacheKey, request);
         return signed;
     }
@@ -152,11 +152,9 @@ class ApexTxSubmitter {
             configHash: request.configHash,
         };
     }
-    evictCachedRequest(cacheKey) {
-        if (this.signedRequestCache.has(cacheKey)) {
-            return;
-        }
-        if (this.signedRequestCache.size < MAX_CACHED_SIGNED_REQUESTS) {
+    ensureCacheCapacityFor(cacheKey) {
+        if (this.signedRequestCache.has(cacheKey) ||
+            this.signedRequestCache.size < MAX_CACHED_SIGNED_REQUESTS) {
             return;
         }
         const oldestKey = this.signedRequestCache.keys().next().value;

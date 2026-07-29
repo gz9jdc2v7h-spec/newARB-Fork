@@ -17,7 +17,6 @@ import type { ConfigRecord, LedgerRecord, NormalizedReceipt, RouteRecord, StateR
 import { EvidenceChain } from '../transparency/EvidenceChain.js';
 import { AuditLogger } from '../transparency/AuditLogger.js';
 export type C1FlashProvider = 'aave' | 'balancer';
-export declare const C1_SELECTORS: Record<C1FlashProvider, string>;
 export interface C1ExecutionRequest {
     opportunityId: string;
     cycleId: string;

@@ -15,7 +15,7 @@
  *   7. Emit LedgerRecord
  */
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.C1Engine = exports.C1_SELECTORS = void 0;
+exports.C1Engine = void 0;
 const ethers_1 = require("ethers");
 const EvidenceChain_js_1 = require("../transparency/EvidenceChain.js");
 const AuditLogger_js_1 = require("../transparency/AuditLogger.js");
@@ -27,12 +27,8 @@ const C1_INTERFACE = new ethers_1.Interface([
     'function initAaveFlash(address borrowAsset, uint256 borrowAmount, bytes encodedRoutePayload)',
     'function initBalancerFlash(address borrowAsset, uint256 borrowAmount, bytes encodedRoutePayload)',
 ]);
-const AAVE_SELECTOR = getRequiredSelector(C1_FUNCTIONS.aave);
-const BALANCER_SELECTOR = getRequiredSelector(C1_FUNCTIONS.balancer);
-exports.C1_SELECTORS = {
-    aave: AAVE_SELECTOR,
-    balancer: BALANCER_SELECTOR,
-};
+assertC1Function(C1_FUNCTIONS.aave);
+assertC1Function(C1_FUNCTIONS.balancer);
 // ── C1Engine ──────────────────────────────────────────────────────────────────
 class C1Engine {
     submitter;
@@ -122,11 +118,10 @@ exports.C1Engine = C1Engine;
 function encodeC1Calldata(req) {
     return C1_INTERFACE.encodeFunctionData(C1_FUNCTIONS[req.flashProvider], [req.borrowAsset, req.borrowAmount, req.encodedRoutePayload]);
 }
-function getRequiredSelector(name) {
+function assertC1Function(name) {
     const fragment = C1_INTERFACE.getFunction(name);
     if (!fragment) {
         throw new Error(`C1Engine: missing ABI fragment for ${name}`);
     }
-    return fragment.selector;
 }
 //# sourceMappingURL=C1Engine.js.map
