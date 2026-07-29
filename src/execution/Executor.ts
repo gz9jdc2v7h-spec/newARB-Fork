@@ -253,7 +253,9 @@ export class Executor {
         );
       } else {
         if (!sellQuote.poolId || !sellDexCfg.vault) {
-          throw new Error(`Missing Balancer pool metadata for ${sellQuote.dex}`);
+          throw new Error(
+            `Missing Balancer ${!sellQuote.poolId ? "poolId" : "vault address"} for ${sellQuote.dex}`
+          );
         }
         const sellVault = sellDexCfg.vault;
         const sellPoolId = sellQuote.poolId;
@@ -313,7 +315,9 @@ export class Executor {
         );
       } else {
         if (!buyQuote.poolId || !buyDexCfg.vault) {
-          throw new Error(`Missing Balancer pool metadata for ${buyQuote.dex}`);
+          throw new Error(
+            `Missing Balancer ${!buyQuote.poolId ? "poolId" : "vault address"} for ${buyQuote.dex}`
+          );
         }
         const buyVault = buyDexCfg.vault;
         const buyPoolId = buyQuote.poolId;

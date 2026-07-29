@@ -1,6 +1,6 @@
 import { ethers } from "ethers";
 import { DexConfig, TOKENS } from "../config";
-import { pLimit, withRetry, toFloat } from "../utils/helpers";
+import { pLimit, positiveIntEnv, withRetry, toFloat } from "../utils/helpers";
 import {
   BALANCER_VAULT_ABI,
   UNIV2_FACTORY_ABI,
@@ -37,12 +37,7 @@ const DEFAULT_AMOUNT_IN_WETH = ethers.parseEther("1");
 const BALANCER_POOL_REGISTERED_TOPIC = ethers.id(
   "PoolRegistered(bytes32,address,uint8)"
 );
-
-function positiveIntEnv(key: string, fallback: number): number {
-  const parsed = parseInt(process.env[key] ?? "", 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
-  return parsed;
-}
+const BALANCER_SWAP_GAS_ESTIMATE = 170_000n;
 
 const BALANCER_DISCOVERY_FROM_BLOCK = positiveIntEnv(
   "BALANCER_DISCOVERY_FROM_BLOCK",
@@ -320,7 +315,7 @@ async function quoteBalancer(
       );
 
       if (deltas.length < 2) continue;
-      const amountOut = deltas[1] < 0n ? -deltas[1] : deltas[1];
+      const amountOut = -deltas[1];
       if (amountOut <= 0n) continue;
 
       const price =
@@ -335,7 +330,7 @@ async function quoteBalancer(
           amountIn,
           amountOut,
           price,
-          gasEstimate: 170_000n,
+          gasEstimate: BALANCER_SWAP_GAS_ESTIMATE,
           timestamp: Date.now(),
           poolId,
         };
