@@ -24,8 +24,8 @@ const C1_FUNCTIONS = {
     balancer: 'initBalancerFlash',
 };
 const C1_INTERFACE = new ethers_1.Interface([
-    'function initAaveFlash(address,uint256,bytes)',
-    'function initBalancerFlash(address,uint256,bytes)',
+    'function initAaveFlash(address borrowAsset, uint256 borrowAmount, bytes encodedRoutePayload)',
+    'function initBalancerFlash(address borrowAsset, uint256 borrowAmount, bytes encodedRoutePayload)',
 ]);
 const AAVE_SELECTOR = getRequiredSelector(C1_FUNCTIONS.aave);
 const BALANCER_SELECTOR = getRequiredSelector(C1_FUNCTIONS.balancer);

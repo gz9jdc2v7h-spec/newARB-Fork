@@ -29,6 +29,7 @@ import { PrivateRelaySubmitter } from '../relay/PrivateRelaySubmitter.js';
 import { AuditLogger } from '../pipeline/transparency/AuditLogger.js';
 
 const MAX_CACHED_SIGNED_REQUESTS = 512;
+type SignedRequestCacheKey = string;
 
 export interface ApexTxSubmitterConfig {
   /** JSON-RPC URL for signing and receipt polling. */
@@ -56,7 +57,7 @@ export class ApexTxSubmitter implements TxSubmitter {
   private readonly relaySubmitter?: PrivateRelaySubmitter;
   private readonly logger: AuditLogger;
   private readonly receiptTimeoutMs: number;
-  private readonly signedRequestCache = new Map<string, ApexTxRequest>();
+  private readonly signedRequestCache = new Map<SignedRequestCacheKey, ApexTxRequest>();
 
   constructor(config: ApexTxSubmitterConfig) {
     this.provider = new JsonRpcProvider(config.rpcUrl);
@@ -93,14 +94,14 @@ export class ApexTxSubmitter implements TxSubmitter {
 
   async sign(request: ApexTxRequest): Promise<SignedTx> {
     const signed = await this.ethersAdapter.sign(request);
-    const cacheKey = keccak256(signed.rawTx);
+    const cacheKey: SignedRequestCacheKey = keccak256(signed.rawTx);
     this.evictCachedRequest(cacheKey);
     this.signedRequestCache.set(cacheKey, request);
     return signed;
   }
 
   async submit(signed: SignedTx): Promise<SubmissionResult> {
-    const cacheKey = keccak256(signed.rawTx);
+    const cacheKey: SignedRequestCacheKey = keccak256(signed.rawTx);
     const request = this.signedRequestCache.get(cacheKey);
 
     if (!request) {
@@ -208,9 +209,8 @@ export class ApexTxSubmitter implements TxSubmitter {
     };
   }
 
-  private evictCachedRequest(cacheKey: string): void {
+  private evictCachedRequest(cacheKey: SignedRequestCacheKey): void {
     if (this.signedRequestCache.has(cacheKey)) {
-      this.signedRequestCache.delete(cacheKey);
       return;
     }
 

@@ -435,6 +435,9 @@ export class OpportunityRanker {
                 tokenInPriceUsd,
               )
             : Number.POSITIVE_INFINITY;
+        // Penalize shallow pools exponentially: once deployed capital grows
+        // toward the buy-side liquidity depth, the Kelly score decays quickly
+        // to reflect higher price-impact and execution-risk exposure.
         const depthPenalty =
           Number.isFinite(buyDepthUsd) && buyDepthUsd > 0
             ? Math.max(

@@ -20,6 +20,7 @@ const NonceManager_js_1 = require("../nonce/NonceManager.js");
 const EthersV6Adapter_js_1 = require("../adapters/EthersV6Adapter.js");
 const PrivateRelaySubmitter_js_1 = require("../relay/PrivateRelaySubmitter.js");
 const AuditLogger_js_1 = require("../pipeline/transparency/AuditLogger.js");
+const MAX_CACHED_SIGNED_REQUESTS = 512;
 class ApexTxSubmitter {
     provider;
     nonceManager;
@@ -58,7 +59,9 @@ class ApexTxSubmitter {
     }
     async sign(request) {
         const signed = await this.ethersAdapter.sign(request);
-        this.signedRequestCache.set((0, ethers_1.keccak256)(signed.rawTx), request);
+        const cacheKey = (0, ethers_1.keccak256)(signed.rawTx);
+        this.evictCachedRequest(cacheKey);
+        this.signedRequestCache.set(cacheKey, request);
         return signed;
     }
     async submit(signed) {
@@ -148,6 +151,19 @@ class ApexTxSubmitter {
             stateHash: request.stateHash,
             configHash: request.configHash,
         };
+    }
+    evictCachedRequest(cacheKey) {
+        if (this.signedRequestCache.has(cacheKey)) {
+            this.signedRequestCache.delete(cacheKey);
+            return;
+        }
+        if (this.signedRequestCache.size < MAX_CACHED_SIGNED_REQUESTS) {
+            return;
+        }
+        const oldestKey = this.signedRequestCache.keys().next().value;
+        if (oldestKey) {
+            this.signedRequestCache.delete(oldestKey);
+        }
     }
 }
 exports.ApexTxSubmitter = ApexTxSubmitter;

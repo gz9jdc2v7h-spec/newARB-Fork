@@ -54,5 +54,6 @@ export declare class ApexTxSubmitter implements TxSubmitter {
     wait(txHash: string, timeoutMs?: number): Promise<NormalizedReceipt>;
     private emitLedgerRecord;
     private buildBaseResult;
+    private evictCachedRequest;
 }
 //# sourceMappingURL=ApexTxSubmitter.d.ts.map
