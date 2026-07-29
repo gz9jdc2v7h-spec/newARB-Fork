@@ -1,3 +1,4 @@
+"use strict";
 /**
  * EvidenceChain — accumulates stage evidence for one opportunity and produces
  * a complete, hashable OpportunityEvidenceChain ready for ledger writing.
@@ -10,8 +11,10 @@
  *   // ... etc
  *   const final = chain.build();
  */
-import { keccak256, toUtf8Bytes } from 'ethers';
-export class EvidenceChain {
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.EvidenceChain = void 0;
+const ethers_1 = require("ethers");
+class EvidenceChain {
     opportunityId;
     configVersion;
     configHash;
@@ -83,7 +86,8 @@ export class EvidenceChain {
      * Use this as a persistent record key.
      */
     chainHash() {
-        return keccak256(toUtf8Bytes(JSON.stringify(this.build())));
+        return (0, ethers_1.keccak256)((0, ethers_1.toUtf8Bytes)(JSON.stringify(this.build())));
     }
 }
+exports.EvidenceChain = EvidenceChain;
 //# sourceMappingURL=EvidenceChain.js.map
