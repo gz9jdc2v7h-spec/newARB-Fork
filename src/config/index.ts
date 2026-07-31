@@ -73,6 +73,36 @@ export const POLL_INTERVAL_MS = parseInt(
   10
 );
 export const LOG_LEVEL = optionalEnv("LOG_LEVEL", "info");
+export const ENABLE_PENDING_FEED = optionalEnv("ENABLE_PENDING_FEED", "true") === "true";
+export const MARKET_EVENT_BUFFER_SIZE = parseInt(
+  optionalEnv("MARKET_EVENT_BUFFER_SIZE", "512"),
+  10
+);
+export const QUOTE_MAX_AGE_MS = parseInt(
+  optionalEnv("QUOTE_MAX_AGE_MS", "4000"),
+  10
+);
+export const ENABLE_ATOMIC_FLASH = optionalEnv("ENABLE_ATOMIC_FLASH", "false") === "true";
+export const ENABLE_PRIVATE_RELAY = optionalEnv("ENABLE_PRIVATE_RELAY", "false") === "true";
+export const ENABLE_BALANCER_QUOTES = optionalEnv("ENABLE_BALANCER_QUOTES", "true") === "true";
+export const ENABLE_CURVE_QUOTES = optionalEnv("ENABLE_CURVE_QUOTES", "true") === "true";
+export const ENABLE_MULTI_HOP_EXECUTION = optionalEnv("ENABLE_MULTI_HOP_EXECUTION", "false") === "true";
+export const ENABLE_MEMPOOL_REPRICING = optionalEnv("ENABLE_MEMPOOL_REPRICING", "false") === "true";
+export const ENABLE_PRODUCTION_OBSERVABILITY = optionalEnv("ENABLE_PRODUCTION_OBSERVABILITY", "true") === "true";
+export const MAX_PENDING_TX_PER_BLOCK = parseInt(
+  optionalEnv("MAX_PENDING_TX_PER_BLOCK", "128"),
+  10
+);
+export const ROUTING_MAX_HOPS = parseInt(optionalEnv("ROUTING_MAX_HOPS", "4"), 10);
+export const FLASH_MAX_ROUTE_STEPS = parseInt(optionalEnv("FLASH_MAX_ROUTE_STEPS", "4"), 10);
+export const REPRICE_TIMEOUT_MS = parseInt(optionalEnv("REPRICE_TIMEOUT_MS", "15000"), 10);
+export const REPRICE_FEE_BUMP_BPS = parseInt(optionalEnv("REPRICE_FEE_BUMP_BPS", "1500"), 10);
+export const REPRICE_MAX_ATTEMPTS = parseInt(optionalEnv("REPRICE_MAX_ATTEMPTS", "2"), 10);
+export const PUBLIC_FALLBACK = optionalEnv("PUBLIC_FALLBACK", "false") === "true";
+export const PRIVATE_RELAY_ENDPOINT = process.env["PRIVATE_RELAY_ENDPOINT"] ?? "";
+export const PRIVATE_RELAY_NAME = optionalEnv("PRIVATE_RELAY_NAME", "fastlane");
+export const FLASH_EXECUTOR_ADDRESS = process.env["FLASH_EXECUTOR_ADDRESS"] ?? "";
+export const FLASH_SIGNER_PRIVATE_KEY = process.env["FLASH_SIGNER_PRIVATE_KEY"] ?? process.env["PRIVATE_KEY"] ?? "";
 
 // ─── Flash Loan ──────────────────────────────────────────────────────────────
 export const AAVE_POOL = optionalEnv(
@@ -613,13 +643,40 @@ export const TIER5_TOKENS: readonly string[] = Object.entries(TOKENS)
 
 export interface DexConfig {
   name: string;
-  type: "UniV2" | "UniV3" | "Balancer";
+  type: "UniV2" | "UniV3" | "Balancer" | "Curve";
   factory?: string;       // UniV2 / UniV3
   quoter?: string;        // UniV3
-  router: string;
+  router?: string;
   vault?: string;         // Balancer
   feeTiers?: number[];    // UniV3 (in bps * 100, e.g. 3000 = 0.3%)
   defaultFee?: number;    // UniV2 fee (e.g. 3000 = 0.3%)
+  /** Balancer V2: known pool IDs to query. Token symbols must match TOKENS keys. */
+  pools?: Array<{ poolId: string; tokens: string[] }>;
+}
+
+export interface BalancerPoolConfig {
+  poolId: string;
+  tokenIn: string;
+  tokenOut: string;
+  swapFeeBps?: number;
+  enabled?: boolean;
+}
+
+export interface CurvePoolConfig {
+  name: string;
+  pool: string;
+  tokenSymbols: string[];
+  tokenAddresses: string[];
+}
+
+function parseJsonEnv<T>(key: string, fallback: T): T {
+  const raw = process.env[key];
+  if (!raw) return fallback;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return fallback;
+  }
 }
 
 export const DEXES: DexConfig[] = [
@@ -654,22 +711,54 @@ export const DEXES: DexConfig[] = [
     type: "Balancer",
     vault: "0xBA12222222228d8Ba445958a75a0704d566BF2C8",
     router: "0xBA12222222228d8Ba445958a75a0704d566BF2C8",
+    pools: [
+      // WMATIC / WETH 80/20 weighted
+      {
+        poolId: "0x0297e37f1873d2dab4487aa67cd56b58e2f27875000200000000000000000002",
+        tokens: ["WMATIC", "WETH"],
+      },
+      // WBTC / WETH 50/50 weighted
+      {
+        poolId: "0xfeadd389a5c427952d8fdb8057d6c8ba1156cc56000200000000000000000049",
+        tokens: ["WBTC", "WETH"],
+      },
+      // WMATIC / USDC / WETH 3-token weighted (pool 0x03cd…)
+      {
+        poolId: "0x03cd191f589d12b0582a99808cf19851e468e6b500010000000000000000000a",
+        tokens: ["WMATIC", "USDC", "WETH"],
+      },
+      // USDC / DAI / USDT ComposableStableSwap
+      {
+        poolId: "0x06df3b2bbb68adc8b0e468d33c17349c2c87b84e000000000000000000000012",
+        tokens: ["USDC", "DAI", "USDT"],
+      },
+    ],
+  },
+  {
+    name: "Curve",
+    type: "Curve",
+    router: "0x0000000000000000000000000000000000000000",
   },
 ];
 
-// ─── Scan pairs ───────────────────────────────────────────────────────────────
-//
-// Each entry is [tokenIn, tokenOut].  The scanner builds the Cartesian product
-// of every pair × every DEX, so keep this list curated but comprehensive.
-//
-// Layout:
-//   Tier 0 × Tier 0  — base/base cross (includes USDC/USDC.e stablecoin arb)
-//   Tier 1 × base    — major assets vs WETH / USDC
-//   Tier 2 × base    — Polygon-native vs WETH / USDC / WMATIC
-//   Tier 3 × stable  — stable-pegged vs stablecoin bases
-//   Tier 4 × base    — LST / yield vs underlying
-//   Tier 5 × base    — long-tail discovery vs WETH / WMATIC
+export const BALANCER_POOLS: BalancerPoolConfig[] = parseJsonEnv<BalancerPoolConfig[]>(
+  "BALANCER_POOLS",
+  []
+).filter((pool) => (pool.enabled ?? true) && Boolean(pool.poolId));
 
+export const CURVE_POOLS: CurvePoolConfig[] = parseJsonEnv<CurvePoolConfig[]>(
+  "CURVE_POOLS",
+  []
+).filter(
+  (pool) =>
+    Boolean(pool.pool) &&
+    Array.isArray(pool.tokenSymbols) &&
+    Array.isArray(pool.tokenAddresses) &&
+    pool.tokenSymbols.length >= 2 &&
+    pool.tokenSymbols.length === pool.tokenAddresses.length
+);
+
+// Pairs to monitor (base token → quote tokens)
 export const SCAN_PAIRS: Array<[string, string]> = [
   // ── Tier 0 × Tier 0 ────────────────────────────────────────────────────────
   ["USDC",   "USDC.e"],  // native vs bridged stablecoin arb

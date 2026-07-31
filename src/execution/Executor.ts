@@ -1,15 +1,15 @@
 import { ethers } from "ethers";
 import { ArbitrageOpportunity } from "../ranking/OpportunityRanker";
 import { getGasData } from "../ranking/GasEstimator";
-import { withRetry, deadline, toFloat } from "../utils/helpers";
+import { withRetry, deadline } from "../utils/helpers";
 import { logger } from "../utils/logger";
-import { TOKENS, getWallet, MAX_SLIPPAGE, DEXES } from "../config";
 import {
   BALANCER_VAULT_ABI,
   UNIV2_ROUTER_ABI,
   UNIV3_ROUTER_ABI,
-  ERC20_ABI,
 } from "../discovery/abis";
+import { RuntimeEventStream } from "../runtime/RuntimeEventStream";
+import { MempoolRepricingManager } from "../runtime/MempoolRepricingManager";
 
 // ─── ERC-20 approval helper ───────────────────────────────────────────────────
 
@@ -152,8 +152,8 @@ const circuitBreaker: CircuitBreaker = {
   open: false,
 };
 
-const CB_THRESHOLD = 3;         // consecutive failures to open
-const CB_RESET_MS = 30_000;     // 30 s cool-down
+const CB_THRESHOLD = 3; // consecutive failures to open
+const CB_RESET_MS = 30_000; // 30 s cool-down
 
 function checkCircuitBreaker(): boolean {
   if (!circuitBreaker.open) return true;
@@ -187,15 +187,22 @@ function recordFailure(): void {
 export class Executor {
   private provider: ethers.Provider;
   private wallet: ethers.Wallet;
+  private readonly eventStream?: RuntimeEventStream;
+  private readonly repricer?: MempoolRepricingManager;
 
-  constructor(provider: ethers.Provider) {
+  constructor(provider: ethers.Provider, eventStream?: RuntimeEventStream) {
     this.provider = provider;
-    this.wallet = getWallet(provider);
+    this.wallet = new ethers.Wallet(process.env["PRIVATE_KEY"] ?? "", provider);
+    this.eventStream = eventStream;
+    this.repricer = ENABLE_MEMPOOL_REPRICING
+      ? new MempoolRepricingManager(eventStream)
+      : undefined;
   }
 
   /**
    * Executes the best opportunity from a ranked list.
-   * Uses a two-leg sequential swap: buy on cheaper DEX, sell on pricier DEX.
+   * Uses a two-leg sequential swap by default and a concrete step-based path
+   * when multi-hop execution is enabled and available.
    */
   async execute(opportunity: ArbitrageOpportunity): Promise<boolean> {
     if (!checkCircuitBreaker()) {
@@ -207,29 +214,35 @@ export class Executor {
     logger.info("Executing opportunity", {
       label,
       netProfitUsd: opportunity.netProfitUsd.toFixed(2),
+      routeKind: opportunity.routeKind,
     });
 
     try {
       const gasData = await getGasData(this.provider);
 
+      if (
+        ENABLE_MULTI_HOP_EXECUTION &&
+        opportunity.routeKind === "multi_hop" &&
+        opportunity.multiHopRoute?.valid
+      ) {
+        return this.executeMultiHop(opportunity, gasData);
+      }
+
       const tokenInCfg = TOKENS[buyQuote.tokenIn]!;
       const tokenOutCfg = TOKENS[buyQuote.tokenOut]!;
 
       // ── Leg 1: sell tokenIn on the higher-price DEX (sellQuote) ────────────
-      // Selling where tokenIn is worth MORE maximises the tokenOut received.
       const slippageFactor = 1 - MAX_SLIPPAGE;
-      const minOut1 = BigInt(
-        Math.floor(Number(sellQuote.amountOut) * slippageFactor)
-      );
+      const minOut1 = BigInt(Math.floor(Number(sellQuote.amountOut) * slippageFactor));
 
       const sellDexCfg = DEXES.find((d) => d.name === sellQuote.dex)!;
       let receipt1: ethers.TransactionReceipt;
 
-      if (sellDexCfg.type === "UniV2") {
+      if (sellDexCfg.type === "UniV2" && sellDexCfg.router) {
         receipt1 = await withRetry(() =>
           executeUniV2Swap(
             this.wallet,
-            sellDexCfg.router,
+            sellDexCfg.router!,
             tokenInCfg.address,
             tokenOutCfg.address,
             tradeAmountIn,
@@ -242,7 +255,7 @@ export class Executor {
         receipt1 = await withRetry(() =>
           executeUniV3Swap(
             this.wallet,
-            sellDexCfg.router,
+            sellDexCfg.router!,
             tokenInCfg.address,
             tokenOutCfg.address,
             fee,
@@ -279,11 +292,18 @@ export class Executor {
         );
       }
 
-      logger.info("Leg 1 confirmed", { hash: receipt1.hash, gas: receipt1.gasUsed.toString() });
+      this.repricer?.registerSubmission(label, receipt1.hash);
+      this.eventStream?.publishExecutionStatus({
+        source: "executor",
+        opportunityId: label,
+        mode: "sequential_live",
+        status: "submitted",
+        detail: receipt1.hash,
+      });
 
-      // ── Leg 2: buy tokenIn back on the lower-price DEX (buyQuote) ──────────
-      // Buying back where tokenIn costs LESS maximises the round-trip profit.
-      // Use the actual output from leg 1 as input to leg 2.
+      logger.info("Leg 1 confirmed", { hash: receipt1.hash, gas: receipt1.gasUsed.toString() });
+      this.publishReceipt(receipt1);
+
       const actualOut1 = await this.getActualOutput(receipt1, tokenOutCfg.address);
       if (actualOut1 === 0n) {
         throw new Error("Leg 1 produced no output — aborting before leg 2");
@@ -293,11 +313,11 @@ export class Executor {
       const buyDexCfg = DEXES.find((d) => d.name === buyQuote.dex)!;
       let receipt2: ethers.TransactionReceipt;
 
-      if (buyDexCfg.type === "UniV2") {
+      if (buyDexCfg.type === "UniV2" && buyDexCfg.router) {
         receipt2 = await withRetry(() =>
           executeUniV2Swap(
             this.wallet,
-            buyDexCfg.router,
+            buyDexCfg.router!,
             tokenOutCfg.address,
             tokenInCfg.address,
             actualOut1,
@@ -310,7 +330,7 @@ export class Executor {
         receipt2 = await withRetry(() =>
           executeUniV3Swap(
             this.wallet,
-            buyDexCfg.router,
+            buyDexCfg.router!,
             tokenOutCfg.address,
             tokenInCfg.address,
             fee,
@@ -348,11 +368,270 @@ export class Executor {
       }
 
       logger.info("Leg 2 confirmed", { hash: receipt2.hash, gas: receipt2.gasUsed.toString() });
+      this.publishReceipt(receipt2);
+      this.repricer?.markConfirmed(label, receipt2.hash);
+      this.eventStream?.publishExecutionStatus({
+        source: "executor",
+        opportunityId: label,
+        mode: "sequential_live",
+        status: "confirmed",
+        detail: receipt2.hash,
+      });
 
       recordSuccess();
       return true;
     } catch (err) {
       logger.error("Execution failed", { label, err: String(err) });
+      this.repricer?.markReverted(label, String(err));
+      this.eventStream?.publishExecutionStatus({
+        source: "executor",
+        opportunityId: label,
+        mode: "sequential_live",
+        status: "reverted",
+        detail: String(err),
+      });
+      recordFailure();
+      return false;
+    }
+  }
+
+  private async executeMultiHop(
+    opportunity: ArbitrageOpportunity,
+    gasData: Awaited<ReturnType<typeof getGasData>>
+  ): Promise<boolean> {
+    const route = opportunity.multiHopRoute;
+    if (!route?.valid) return false;
+
+    this.eventStream?.publishExecutionStatus({
+      source: "executor",
+      opportunityId: opportunity.label,
+      mode: "multi_hop",
+      status: "submitted",
+      detail: route.routeId,
+    });
+
+    for (const step of route.steps) {
+      const dex = DEXES.find((d) => d.name === step.dex);
+      const tokenInCfg = TOKENS[step.tokenIn];
+      const tokenOutCfg = TOKENS[step.tokenOut];
+      if (!dex || !tokenInCfg || !tokenOutCfg || !dex.router) {
+        throw new Error(`Unsupported multi-hop step ${step.dex} ${step.tokenIn}/${step.tokenOut}`);
+      }
+
+      const amountIn = BigInt(step.amountIn);
+      const minOut = BigInt(
+        Math.floor(Number(step.expectedOut) * Math.max(0, 1 - MAX_SLIPPAGE))
+      );
+
+      const receipt =
+        dex.type === "UniV2"
+          ? await executeUniV2Swap(
+              this.wallet,
+              dex.router,
+              tokenInCfg.address,
+              tokenOutCfg.address,
+              amountIn,
+              minOut,
+              gasData
+            )
+          : await executeUniV3Swap(
+              this.wallet,
+              dex.router,
+              tokenInCfg.address,
+              tokenOutCfg.address,
+              dex.feeTiers?.[0] ?? 3000,
+              amountIn,
+              minOut,
+              gasData
+            );
+
+      this.publishReceipt(receipt);
+    }
+
+    this.eventStream?.publishExecutionStatus({
+      source: "executor",
+      opportunityId: opportunity.label,
+      mode: "multi_hop",
+      status: "confirmed",
+      detail: route.routeId,
+    });
+    return true;
+  }
+
+  private publishReceipt(receipt: ethers.TransactionReceipt): void {
+    this.eventStream?.publishReceipt(
+      {
+        txHash: receipt.hash,
+        receiptStatus: receipt.status === 1,
+        confirmedBlock: receipt.blockNumber,
+        gasUsed: receipt.gasUsed.toString(),
+        rawReceipt: {},
+        effectiveGasPrice: receipt.gasPrice?.toString() ?? "0",
+        gasCostWei: ((receipt.gasPrice ?? 0n) * receipt.gasUsed).toString(),
+        from: receipt.from,
+        to: receipt.to ?? "",
+        logs: [],
+      },
+      "executor"
+    );
+  }
+
+  /**
+   * Executes an arbitrage opportunity atomically via an Aave V3 flash loan.
+   *
+   * The flash loan borrows `tradeAmountIn` of tokenIn, passes encoded swap
+   * instructions to a deployed FlashLoanExecutor contract via the `params`
+   * argument, which then performs both swap legs inside `executeOperation()`
+   * and repays the loan + fee in a single transaction.
+   *
+   * SCAFFOLD: Requires FLASH_EXECUTOR_ADDRESS to be set in the environment.
+   * The FlashLoanExecutor contract must implement IFlashLoanSimpleReceiver
+   * and decode the params struct below.
+   *
+   * Params ABI type (decoded by the receiver):
+   *   tuple(
+   *     address tokenIn,
+   *     address tokenOut,
+   *     address buyRouter,
+   *     address sellRouter,
+   *     uint256 amountIn,
+   *     uint256 minOut1,
+   *     uint256 minOut2,
+   *     uint8   buyRouterType,   // 0 = UniV2, 1 = UniV3
+   *     uint8   sellRouterType,  // 0 = UniV2, 1 = UniV3
+   *     uint24  buyFee,
+   *     uint24  sellFee
+   *   )
+   */
+  async executeAtomic(opportunity: ArbitrageOpportunity): Promise<boolean> {
+    const flashExecutorAddr = process.env["FLASH_EXECUTOR_ADDRESS"];
+    if (!flashExecutorAddr) {
+      logger.warn(
+        "FLASH_EXECUTOR_ADDRESS not configured — atomic execution unavailable"
+      );
+      return false;
+    }
+
+    if (!checkCircuitBreaker()) {
+      logger.warn("Circuit breaker OPEN — skipping atomic execution");
+      return false;
+    }
+
+    const { buyQuote, sellQuote, tradeAmountIn, label } = opportunity;
+    logger.info("Executing atomic flash opportunity", {
+      label,
+      netProfitUsd: opportunity.netProfitUsd.toFixed(2),
+    });
+
+    try {
+      const gasData = await getGasData(this.provider);
+
+      const tokenInCfg = TOKENS[buyQuote.tokenIn]!;
+      const tokenOutCfg = TOKENS[buyQuote.tokenOut]!;
+      const slippageFactor = 1 - MAX_SLIPPAGE;
+
+      const buyDexCfg = DEXES.find((d) => d.name === buyQuote.dex)!;
+      const sellDexCfg = DEXES.find((d) => d.name === sellQuote.dex)!;
+
+      // Router type flag: 0 = UniV2, 1 = UniV3, 2 = Balancer
+      const buyRouterType = buyDexCfg.type === "UniV3" ? 1 : buyDexCfg.type === "Balancer" ? 2 : 0;
+      const sellRouterType = sellDexCfg.type === "UniV3" ? 1 : sellDexCfg.type === "Balancer" ? 2 : 0;
+
+      // Fee tier only applies to UniV2/UniV3 routers; Balancer uses 0 (fee is
+      // embedded in the pool ID and handled by the vault internally)
+      const buyFee =
+        buyDexCfg.type === "Balancer"
+          ? 0
+          : (buyDexCfg.feeTiers?.[0] ?? buyDexCfg.defaultFee ?? 3000);
+      const sellFee =
+        sellDexCfg.type === "Balancer"
+          ? 0
+          : (sellDexCfg.feeTiers?.[0] ?? sellDexCfg.defaultFee ?? 3000);
+
+      const minOut1 = BigInt(
+        Math.floor(Number(buyQuote.amountOut) * slippageFactor)
+      );
+      const minOut2 = BigInt(
+        Math.floor(Number(sellQuote.amountOut) * slippageFactor)
+      );
+
+      // Encode the two-leg swap instructions for the FlashLoanExecutor callback
+      const abiCoder = ethers.AbiCoder.defaultAbiCoder();
+      const flashLoanParams = abiCoder.encode(
+        [
+          "tuple(address tokenIn, address tokenOut, address buyRouter, address sellRouter, uint256 amountIn, uint256 minOut1, uint256 minOut2, uint8 buyRouterType, uint8 sellRouterType, uint24 buyFee, uint24 sellFee)",
+        ],
+        [
+          {
+            tokenIn: tokenInCfg.address,
+            tokenOut: tokenOutCfg.address,
+            buyRouter: buyDexCfg.router,
+            sellRouter: sellDexCfg.router,
+            amountIn: tradeAmountIn,
+            minOut1,
+            minOut2,
+            buyRouterType,
+            sellRouterType,
+            buyFee,
+            sellFee,
+          },
+        ]
+      );
+
+      const aavePool = new ethers.Contract(AAVE_POOL, AAVE_POOL_ABI, this.wallet);
+      const tx: ethers.TransactionResponse = await aavePool.flashLoan(
+        flashExecutorAddr,         // receiver — our FlashLoanExecutor contract
+        [tokenInCfg.address],      // assets to borrow
+        [tradeAmountIn],           // amounts
+        [0],                       // 0 = no open debt (standard flash loan)
+        flashExecutorAddr,         // onBehalfOf
+        flashLoanParams,           // encoded swap instructions
+        0,                         // referralCode
+        {
+          maxFeePerGas: gasData.maxFeePerGas,
+          maxPriorityFeePerGas: gasData.maxPriorityFee,
+        }
+      );
+
+      logger.info("Atomic flash loan submitted", { hash: tx.hash });
+      this.eventStream?.publishHealth(
+        "execution",
+        "ok",
+        `Flash loan submitted: ${tx.hash}`,
+        "executor"
+      );
+
+      const receipt = await tx.wait(1);
+      if (!receipt || receipt.status !== 1) {
+        throw new Error(`Atomic execution reverted: ${tx.hash}`);
+      }
+
+      logger.info("Atomic execution confirmed", {
+        hash: receipt.hash,
+        gas: receipt.gasUsed.toString(),
+      });
+      this.eventStream?.publishReceipt(
+        {
+          txHash: receipt.hash,
+          receiptStatus: receipt.status === 1,
+          confirmedBlock: receipt.blockNumber,
+          gasUsed: receipt.gasUsed.toString(),
+          rawReceipt: {},
+          effectiveGasPrice: receipt.gasPrice?.toString() ?? "0",
+          gasCostWei: (
+            (receipt.gasPrice ?? 0n) * receipt.gasUsed
+          ).toString(),
+          from: receipt.from,
+          to: receipt.to ?? "",
+          logs: [],
+        },
+        "executor"
+      );
+
+      recordSuccess();
+      return true;
+    } catch (err) {
+      logger.error("Atomic execution failed", { label, err: String(err) });
       recordFailure();
       return false;
     }

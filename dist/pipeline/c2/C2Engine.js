@@ -22,7 +22,6 @@
  */
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.C2Engine = void 0;
-exports.selectC2Decision = selectC2Decision;
 const ethers_1 = require("ethers");
 const EvidenceChain_js_1 = require("../transparency/EvidenceChain.js");
 const AuditLogger_js_1 = require("../transparency/AuditLogger.js");
@@ -39,13 +38,7 @@ class C2Engine {
         chain.setConfig(req.config);
         chain.setState(req.postC1State);
         const postC1StateHash = req.postC1State.stateHash;
-        const { decision, selectedCandidate } = selectC2Decision(req.mirrorCandidate, req.reverseCandidate, Number(req.config.minNetProfitUsd));
-        const c2RouteHash = selectedCandidate
-            ? (0, ethers_1.keccak256)((0, ethers_1.toUtf8Bytes)(JSON.stringify(selectedCandidate.route)))
-            : undefined;
-        if (selectedCandidate) {
-            chain.setRoute(selectedCandidate.route);
-        }
+        const c2RouteHash = (0, ethers_1.keccak256)((0, ethers_1.toUtf8Bytes)(JSON.stringify(req.c2Route)));
         chain.setC2({
             cycleId: req.cycleId,
             parentC1TxHash: req.parentC1TxHash,
@@ -249,36 +242,4 @@ class C2Engine {
     }
 }
 exports.C2Engine = C2Engine;
-function selectC2Decision(mirrorCandidate, reverseCandidate, minNetProfitUsd) {
-    const mirrorNet = parseProfit(mirrorCandidate?.netProfitUsd);
-    const reverseNet = parseProfit(reverseCandidate?.netProfitUsd);
-    const mirrorValid = !!mirrorCandidate?.allGatesPassed && mirrorNet !== null;
-    const reverseValid = !!reverseCandidate?.allGatesPassed && reverseNet !== null;
-    if (mirrorCandidate &&
-        mirrorValid &&
-        mirrorNet !== null &&
-        mirrorNet >= minNetProfitUsd &&
-        mirrorNet >= (reverseNet ?? Number.NEGATIVE_INFINITY)) {
-        return { decision: 'MIRROR', selectedCandidate: mirrorCandidate };
-    }
-    if (reverseCandidate &&
-        reverseValid &&
-        reverseNet !== null &&
-        reverseNet >= minNetProfitUsd &&
-        reverseNet > (mirrorNet ?? Number.NEGATIVE_INFINITY)) {
-        return { decision: 'REVERSE', selectedCandidate: reverseCandidate };
-    }
-    return { decision: 'NO_OP' };
-}
-function parseProfit(value) {
-    if (!value)
-        return null;
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : null;
-}
-function hasDynamicReuse(guard) {
-    if (!guard)
-        return false;
-    return Object.values(guard).some(Boolean);
-}
 //# sourceMappingURL=C2Engine.js.map

@@ -23,6 +23,7 @@
 import { keccak256, toUtf8Bytes } from 'ethers';
 import type {
   ApexTxRequest,
+  C2Decision,
   ConfigRecord,
   LedgerRecord,
   NormalizedReceipt,
@@ -34,29 +35,7 @@ import type {
 import { EvidenceChain } from '../transparency/EvidenceChain.js';
 import { AuditLogger } from '../transparency/AuditLogger.js';
 
-export type C2Decision = 'MIRROR' | 'REVERSE' | 'NO_OP';
-
-export interface C2ReuseGuard {
-  reusedC1Quotes?: boolean;
-  reusedC1Sizing?: boolean;
-  reusedC1PoolReserves?: boolean;
-  reusedC1MinOutputs?: boolean;
-  reusedC1Calldata?: boolean;
-  reusedC1PredictedProfit?: boolean;
-  reusedC1RouteRank?: boolean;
-}
-
-export interface C2Candidate {
-  route: RouteRecord;
-  encodedRoutePayload: string;
-  borrowAsset: string;
-  borrowAmount: bigint;
-  minFinalAmount: bigint;
-  deadline: number;
-  netProfitUsd: string;
-  allGatesPassed: boolean;
-  reuseGuard?: C2ReuseGuard;
-}
+export type { C2Decision };
 
 export interface C2ExecutionRequest {
   opportunityId: string;
@@ -239,8 +218,8 @@ export class C2Engine {
       };
     }
 
-    // ── Invariant 3: NO_OP is valid — log and return ───────────────────────────
-    if (decision === 'NO_OP' || !selectedCandidate) {
+    // ── Invariant 3: NO_OP is valid — log and return ────────────────────────────
+    if (req.c2Decision === 'NO_OP') {
       this.logger.logRejection({
         opportunityId: req.opportunityId,
         stage: 'PROFIT_GATE',
@@ -248,32 +227,13 @@ export class C2Engine {
         reason: 'NET_PROFIT_BELOW_MINIMUM',
         configVersion: req.config.configVersion,
         stateHash: postC1StateHash,
-        routeHash: c2RouteHash ?? '0x0',
+        routeHash: c2RouteHash,
         detail: 'C2 decision: NO_OP — no profitable continuation found',
         timestamp: Date.now(),
       });
       return {
         cycleId: req.cycleId,
         decision: 'NO_OP',
-        skipped: true,
-        evidenceChain: chain,
-      };
-    }
-
-    if (!c2RouteHash) {
-      this.logger.logRejection({
-        opportunityId: req.opportunityId,
-        stage: 'SUBMISSION',
-        status: 'REJECTED',
-        reason: 'PAYLOAD_ABI_MISMATCH',
-        configVersion: req.config.configVersion,
-        stateHash: postC1StateHash,
-        detail: 'Selected candidate missing route hash',
-        timestamp: Date.now(),
-      });
-      return {
-        cycleId: req.cycleId,
-        decision,
         skipped: true,
         evidenceChain: chain,
       };

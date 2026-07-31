@@ -20,6 +20,7 @@ const NonceManager_js_1 = require("../nonce/NonceManager.js");
 const EthersV6Adapter_js_1 = require("../adapters/EthersV6Adapter.js");
 const PrivateRelaySubmitter_js_1 = require("../relay/PrivateRelaySubmitter.js");
 const AuditLogger_js_1 = require("../pipeline/transparency/AuditLogger.js");
+const MAX_CACHED_SIGNED_REQUESTS = 512;
 class ApexTxSubmitter {
     provider;
     nonceManager;
@@ -27,6 +28,7 @@ class ApexTxSubmitter {
     relaySubmitter;
     logger;
     receiptTimeoutMs;
+    signedRequestCache = new Map();
     constructor(config) {
         this.provider = new ethers_1.JsonRpcProvider(config.rpcUrl);
         this.nonceManager = new NonceManager_js_1.NonceManager(this.provider);
@@ -56,15 +58,21 @@ class ApexTxSubmitter {
         return this.ethersAdapter.build(request);
     }
     async sign(request) {
-        return this.ethersAdapter.sign(request);
+        const signed = await this.ethersAdapter.sign(request);
+        const cacheKey = (0, ethers_1.keccak256)(signed.rawTx);
+        this.ensureCacheCapacityFor(cacheKey);
+        this.signedRequestCache.set(cacheKey, request);
+        return signed;
     }
     async submit(signed) {
-        // We need the originating request to determine relay policy.
-        // submit() receives a SignedTx, so relay policy was baked in at sign() time.
-        // Callers should use submitWithRequest() for relay-aware submission.
-        // This overload assumes public submission (used by tests / dry-run).
-        throw new Error('ApexTxSubmitter: call submitWithRequest(signed, request) instead of submit(signed). ' +
-            'Relay policy requires the original ApexTxRequest.');
+        const cacheKey = (0, ethers_1.keccak256)(signed.rawTx);
+        const request = this.signedRequestCache.get(cacheKey);
+        if (!request) {
+            throw new Error('ApexTxSubmitter: missing cached ApexTxRequest for signed transaction. ' +
+                'Ensure submit() is called with the SignedTx returned by this instance’s sign() method.');
+        }
+        this.signedRequestCache.delete(cacheKey);
+        return this.submitWithRequest(signed, request);
     }
     /**
      * Full submit: private relay first (if configured), public fallback only if
@@ -143,6 +151,16 @@ class ApexTxSubmitter {
             stateHash: request.stateHash,
             configHash: request.configHash,
         };
+    }
+    ensureCacheCapacityFor(cacheKey) {
+        if (this.signedRequestCache.has(cacheKey) ||
+            this.signedRequestCache.size < MAX_CACHED_SIGNED_REQUESTS) {
+            return;
+        }
+        const oldestKey = this.signedRequestCache.keys().next().value;
+        if (oldestKey) {
+            this.signedRequestCache.delete(oldestKey);
+        }
     }
 }
 exports.ApexTxSubmitter = ApexTxSubmitter;

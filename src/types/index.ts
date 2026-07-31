@@ -7,7 +7,7 @@
 
 // ─── Core submission pipeline ────────────────────────────────────────────────
 
-export type CycleType = 'C1' | 'C2';
+export type CycleType = 'C1' | 'C2' | 'LIQUIDATION';
 export type SubmitterAdapter = 'ethers_v6' | 'web3' | 'private_relay';
 export type SubmissionStatus =
   | 'SUBMITTED_PRIVATE'
@@ -18,6 +18,7 @@ export type SubmissionStatus =
 export type ReceiptStatus = 'PENDING' | 'CONFIRMED' | 'REVERTED' | 'EXPIRED';
 export type SettlementStatus = 'SETTLED' | 'FAILED' | 'PENDING' | 'REVERTED';
 export type MachineMode = 'dry_run' | 'sim_only' | 'live';
+export type ExecutionMode = 'dry_run' | 'sequential_live' | 'private_relay_live' | 'atomic_flash';
 
 // ─── Request types ────────────────────────────────────────────────────────────
 
@@ -264,6 +265,8 @@ export interface ProfitRecord {
   simulatedNetUsd?: string;
   submittedNetUsd?: string;
   realizedNetUsd?: string;
+  sizingMethod?: string;
+  invariantFamilies?: string[];
 }
 
 export interface SimulationRecord {
@@ -305,6 +308,20 @@ export interface SettlementRecord {
   settlementStatus: SettlementStatus;
 }
 
+export interface MarketContextRecord {
+  observedEventCount: number;
+  latestBlockNumber?: number;
+  pendingTxCount?: number;
+  quoteAgeMs?: number;
+}
+
+export interface ExecutionDecisionRecord {
+  mode: ExecutionMode;
+  shouldExecute: boolean;
+  rationale: string;
+  riskFlags: string[];
+}
+
 /** Complete evidence chain for one opportunity. */
 export interface OpportunityEvidenceChain {
   opportunityId: string;
@@ -323,11 +340,13 @@ export interface OpportunityEvidenceChain {
   state?: StateRecord;
   route?: RouteRecord;
   profit?: ProfitRecord;
+  marketContext?: MarketContextRecord;
   simulation?: SimulationRecord;
   payload?: PayloadRecord;
   submission?: SubmissionResult;
   settlement?: SettlementRecord;
   rejection?: RejectionRecord;
+  executionDecision?: ExecutionDecisionRecord;
 
   // C1/C2 breakdown
   c1?: {
@@ -345,10 +364,6 @@ export interface OpportunityEvidenceChain {
     parentC1TxHash: string;
     postC1StateHash: string;
     c2Decision: 'MIRROR' | 'REVERSE' | 'NO_OP';
-    c2MirrorNetProfitUsd?: string;
-    c2ReverseNetProfitUsd?: string;
-    c2MirrorGatesPassed?: boolean;
-    c2ReverseGatesPassed?: boolean;
     c2RouteHash?: string;
     c2SimHash?: string;
     c2TxHash?: string;
@@ -356,16 +371,147 @@ export interface OpportunityEvidenceChain {
   };
 }
 
+// ─── C1 state commitment ─────────────────────────────────────────────────────
+
+/**
+ * The authoritative post-C1 state commitment produced after C1 settlement.
+ *
+ * H_{C1} = keccak256(encode[
+ *   chainId, blockNumber, transactionHash, affectedPoolIds,
+ *   postTradeStateHashes, realizedProfit, executor, routeId
+ * ])
+ *
+ * This commits to observed post-transaction state, not the pre-execution
+ * prediction.  C2 must reload from this hash before making any decision.
+ */
 export interface C1StateCommitment {
+  /** The authoritative C1_STATE_HASH. */
+  c1StateHash: string;
   chainId: number;
   blockNumber: number;
   transactionHash: string;
+  /** Deduplicated addresses of pools touched in the C1 receipt logs. */
   affectedPoolIds: string[];
+  /** Per-pool post-trade state hash derived from receipt log data. */
   postTradeStateHashes: string[];
-  realizedProfitUsd: string;
+  /**
+   * Realized net profit in USD (or '0' when settlement has not yet reconciled).
+   * The ledger settlement layer may produce a revised commitment once PnL is
+   * confirmed; until then this field is '0'.
+   */
+  realizedProfit: string;
   executor: string;
   routeId: string;
+}
+
+// ─── C2 decision function inputs / outputs ───────────────────────────────────
+
+/**
+ * Per-route evaluation fed into the D_C2 decision function.
+ * Both the MIRROR and REVERSE evaluations must be produced from fresh
+ * post-C1 state; never from C1 quotes, sizing, or predictions.
+ */
+export interface C2RouteEvaluation {
+  /** All hard gates pass (state age, simulation, impact, profit floor). */
+  valid: boolean;
+  /** Net profit in USD computed from fresh post-C1 state. */
+  netProfitUsd: number;
+  routeHash: string;
+  rejectionReasons: string[];
+}
+
+/**
+ * Inputs to the formal D_C2 terminal decision function.
+ *
+ * C2 must never reuse: C1 quotes, C1 sizing, C1 pool reserves,
+ * C1 minimum outputs, C1 calldata, C1 predicted profit, C1 route rank.
+ */
+export interface C2DecisionInput {
+  /** Authoritative post-C1 state commitment from which this evaluation was derived. */
   c1StateHash: string;
+  /** Minimum net profit threshold (USD). */
+  minNetProfitUsd: number;
+  /** Evaluation of the MIRROR route (same direction as C1). */
+  mirrorEval: C2RouteEvaluation;
+  /** Evaluation of the REVERSE route (opposite direction). */
+  reverseEval: C2RouteEvaluation;
+}
+
+/**
+ * Output of the D_C2 terminal decision function.
+ *
+ * D_C2 = MIRROR   when V_M=1 AND N_M >= N_min AND N_M >= N_R
+ *       REVERSE   when V_R=1 AND N_R >= N_min AND N_R >  N_M
+ *       NO_OP     otherwise
+ */
+export interface C2DecisionOutput {
+  decision: C2Decision;
+  /** Expected net profit for the selected route (0 for NO_OP). */
+  selectedNetProfitUsd: number;
+  selectedRouteHash: string | null;
+  rationale: string;
+}
+
+export type C2Decision = 'MIRROR' | 'REVERSE' | 'NO_OP';
+
+// ─── Liquidation execution lane ──────────────────────────────────────────────
+
+export type LiquidationProtocol = 'aave_v3' | 'compound_v3' | 'morpho';
+
+/**
+ * Input to the liquidation execution lane.
+ *
+ * The liquidation lane is operationally independent from C1 and C2.
+ * It must not receive or consume any C1 / C2 state, quotes, or calldata.
+ */
+export interface LiquidationRequest {
+  opportunityId: string;
+  cycleId: string;
+  config: ConfigRecord;
+
+  // Liquidation target
+  protocol: LiquidationProtocol;
+  collateralAsset: string;
+  debtAsset: string;
+  borrowerAddress: string;
+  debtToCover: bigint;
+  /** Expected collateral received after liquidation penalty. */
+  expectedCollateralOut: bigint;
+
+  // Execution parameters
+  executor: string;
+  encodedLiquidationPayload: string;
+  signerPrivateKey: string;
+  gasLimit: bigint;
+  maxFeePerGas: bigint;
+  maxPriorityFeePerGas: bigint;
+  expiresAtBlock: number;
+  relayEndpoint: string;
+  publicFallback: boolean;
+
+  // State freshness: must reload independently, never from C1/C2
+  state: StateRecord;
+  stateHash: string;
+
+  // Economic gate
+  minNetProfitUsd: number;
+  estimatedNetProfitUsd: number;
+
+  // Evidence hashes
+  opportunityHash: string;
+  payloadHash: string;
+  simulationHash?: string;
+}
+
+export interface LiquidationResult {
+  cycleId: string;
+  protocol: LiquidationProtocol;
+  /** false when the economic or state gate prevented execution. */
+  executed: boolean;
+  skipReason?: string;
+  submission?: SubmissionResult;
+  receipt?: NormalizedReceipt;
+  ledgerRecord?: LedgerRecord;
 }
 
 // ─── Main TxSubmitter interface — the ONLY public surface ─────────────────────
