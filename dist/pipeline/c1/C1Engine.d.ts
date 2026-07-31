@@ -13,7 +13,7 @@
  *   6. Write c1_cycle settlement record to ledger
  *   7. Emit LedgerRecord
  */
-import type { ConfigRecord, LedgerRecord, NormalizedReceipt, RouteRecord, StateRecord, SubmissionResult, TxSubmitter } from '../../types/index.js';
+import type { C1StateCommitment, ConfigRecord, LedgerRecord, NormalizedReceipt, RouteRecord, StateRecord, SubmissionResult, TxSubmitter } from '../../types/index.js';
 import { EvidenceChain } from '../transparency/EvidenceChain.js';
 import { AuditLogger } from '../transparency/AuditLogger.js';
 export type C1FlashProvider = 'aave' | 'balancer';
@@ -41,12 +41,19 @@ export interface C1ExecutionRequest {
     payloadHash: string;
     stateHash: string;
     simulationHash?: string;
+    postC1ObservedState: {
+        affectedPoolIds: string[];
+        postTradeStateHashes: string[];
+        realizedProfitUsd: string;
+        routeId?: string;
+    };
 }
 export interface C1ExecutionResult {
     cycleId: string;
     submission: SubmissionResult;
     receipt: NormalizedReceipt;
     ledgerRecord: LedgerRecord;
+    c1StateCommitment: C1StateCommitment;
     evidenceChain: EvidenceChain;
 }
 export declare class C1Engine {
@@ -55,4 +62,5 @@ export declare class C1Engine {
     constructor(submitter: TxSubmitter, logger?: AuditLogger);
     execute(req: C1ExecutionRequest): Promise<C1ExecutionResult>;
 }
+export declare function buildC1StateCommitment(req: C1ExecutionRequest, receipt: NormalizedReceipt, txHash: string): C1StateCommitment;
 //# sourceMappingURL=C1Engine.d.ts.map

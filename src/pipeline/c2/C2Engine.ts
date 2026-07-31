@@ -50,17 +50,14 @@ export interface C2ExecutionRequest {
   // Post-C1 reloaded state
   postC1State: StateRecord;
 
-  // C2 route (may be mirror or reverse of C1 route)
-  c2Route: RouteRecord;
-  c2Decision: C2Decision;
+  // C2 candidates recomputed from post-C1 state
+  mirrorCandidate?: C2Candidate;
+  reverseCandidate?: C2Candidate;
+  c1StateHash: string;
+  reloadedFromC1StateHash: string;
 
-  // Execution parameters
+  // Execution parameters (shared)
   executor: string;
-  encodedRoutePayload: string;
-  borrowAsset: string;
-  borrowAmount: bigint;
-  minFinalAmount: bigint;
-  deadline: number;
   signerPrivateKey: string;
   gasLimit: bigint;
   maxFeePerGas: bigint;
@@ -107,19 +104,51 @@ export class C2Engine {
     );
     chain.setConfig(req.config);
     chain.setState(req.postC1State);
-    chain.setRoute(req.c2Route);
 
     const postC1StateHash = req.postC1State.stateHash;
-    const c2RouteHash     = keccak256(toUtf8Bytes(JSON.stringify(req.c2Route)));
+    const { decision, selectedCandidate } = selectC2Decision(
+      req.mirrorCandidate,
+      req.reverseCandidate,
+      Number(req.config.minNetProfitUsd),
+    );
+    const c2RouteHash = selectedCandidate
+      ? keccak256(toUtf8Bytes(JSON.stringify(selectedCandidate.route)))
+      : undefined;
+    if (selectedCandidate) {
+      chain.setRoute(selectedCandidate.route);
+    }
 
     chain.setC2({
       cycleId: req.cycleId,
       parentC1TxHash: req.parentC1TxHash,
       postC1StateHash,
-      c2Decision: req.c2Decision,
+      c2Decision: decision,
+      c2MirrorNetProfitUsd: req.mirrorCandidate?.netProfitUsd,
+      c2ReverseNetProfitUsd: req.reverseCandidate?.netProfitUsd,
+      c2MirrorGatesPassed: req.mirrorCandidate?.allGatesPassed ?? false,
+      c2ReverseGatesPassed: req.reverseCandidate?.allGatesPassed ?? false,
       c2RouteHash,
       c2SimHash: req.simulationHash,
     });
+
+    if (req.c1StateHash !== req.reloadedFromC1StateHash) {
+      this.logger.logRejection({
+        opportunityId: req.opportunityId,
+        stage: 'SUBMISSION',
+        status: 'REJECTED',
+        reason: 'C2_STATE_RELOAD_MISMATCH',
+        configVersion: req.config.configVersion,
+        stateHash: postC1StateHash,
+        detail: `Expected reload marker ${req.c1StateHash}, got ${req.reloadedFromC1StateHash}`,
+        timestamp: Date.now(),
+      });
+      return {
+        cycleId: req.cycleId,
+        decision,
+        skipped: true,
+        evidenceChain: chain,
+      };
+    }
 
     // ── Invariant 1: Parent C1 must be confirmed ───────────────────────────────
     if (!req.parentC1ReceiptStatus) {
@@ -130,13 +159,13 @@ export class C2Engine {
         reason: 'C2_PARENT_NOT_CONFIRMED',
         configVersion: req.config.configVersion,
         stateHash: postC1StateHash,
-        routeHash: c2RouteHash,
+        routeHash: c2RouteHash ?? '0x0',
         detail: `Parent C1 tx ${req.parentC1TxHash} did not confirm`,
         timestamp: Date.now(),
       });
       return {
         cycleId: req.cycleId,
-        decision: req.c2Decision,
+        decision,
         skipped: true,
         evidenceChain: chain,
       };
@@ -160,7 +189,30 @@ export class C2Engine {
       });
       return {
         cycleId: req.cycleId,
-        decision: req.c2Decision,
+        decision,
+        skipped: true,
+        evidenceChain: chain,
+      };
+    }
+
+    if (
+      hasDynamicReuse(req.mirrorCandidate?.reuseGuard) ||
+      hasDynamicReuse(req.reverseCandidate?.reuseGuard)
+    ) {
+      this.logger.logRejection({
+        opportunityId: req.opportunityId,
+        stage: 'SUBMISSION',
+        status: 'REJECTED',
+        reason: 'C2_DYNAMIC_REUSE_DETECTED',
+        configVersion: req.config.configVersion,
+        stateHash: postC1StateHash,
+        routeHash: c2RouteHash ?? '0x0',
+        detail: 'Rejected due to C1 dynamic artifact reuse attempt',
+        timestamp: Date.now(),
+      });
+      return {
+        cycleId: req.cycleId,
+        decision,
         skipped: true,
         evidenceChain: chain,
       };
@@ -199,7 +251,7 @@ export class C2Engine {
       maxFeePerGas: req.maxFeePerGas,
       maxPriorityFeePerGas: req.maxPriorityFeePerGas,
       to: req.executor,
-      data: req.encodedRoutePayload,
+      data: selectedCandidate.encodedRoutePayload,
       opportunityHash: req.opportunityHash,
       payloadHash: req.payloadHash,
       routeHash: c2RouteHash,
@@ -244,7 +296,11 @@ export class C2Engine {
       cycleId: req.cycleId,
       parentC1TxHash: req.parentC1TxHash,
       postC1StateHash,
-      c2Decision: req.c2Decision,
+      c2Decision: decision,
+      c2MirrorNetProfitUsd: req.mirrorCandidate?.netProfitUsd,
+      c2ReverseNetProfitUsd: req.reverseCandidate?.netProfitUsd,
+      c2MirrorGatesPassed: req.mirrorCandidate?.allGatesPassed ?? false,
+      c2ReverseGatesPassed: req.reverseCandidate?.allGatesPassed ?? false,
       c2RouteHash,
       c2SimHash: req.simulationHash,
       c2TxHash: submission.txHash,
@@ -252,7 +308,7 @@ export class C2Engine {
 
     return {
       cycleId: req.cycleId,
-      decision: req.c2Decision,
+      decision,
       skipped: false,
       submission,
       receipt,
@@ -260,4 +316,48 @@ export class C2Engine {
       evidenceChain: chain,
     };
   }
+}
+
+export function selectC2Decision(
+  mirrorCandidate: C2Candidate | undefined,
+  reverseCandidate: C2Candidate | undefined,
+  minNetProfitUsd: number,
+): { decision: C2Decision; selectedCandidate?: C2Candidate } {
+  const mirrorNet = parseProfit(mirrorCandidate?.netProfitUsd);
+  const reverseNet = parseProfit(reverseCandidate?.netProfitUsd);
+  const mirrorValid = !!mirrorCandidate?.allGatesPassed && mirrorNet !== null;
+  const reverseValid = !!reverseCandidate?.allGatesPassed && reverseNet !== null;
+
+  if (
+    mirrorCandidate &&
+    mirrorValid &&
+    mirrorNet !== null &&
+    mirrorNet >= minNetProfitUsd &&
+    mirrorNet >= (reverseNet ?? Number.NEGATIVE_INFINITY)
+  ) {
+    return { decision: 'MIRROR', selectedCandidate: mirrorCandidate };
+  }
+
+  if (
+    reverseCandidate &&
+    reverseValid &&
+    reverseNet !== null &&
+    reverseNet >= minNetProfitUsd &&
+    reverseNet > (mirrorNet ?? Number.NEGATIVE_INFINITY)
+  ) {
+    return { decision: 'REVERSE', selectedCandidate: reverseCandidate };
+  }
+
+  return { decision: 'NO_OP' };
+}
+
+function parseProfit(value: string | undefined): number | null {
+  if (!value) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function hasDynamicReuse(guard: C2ReuseGuard | undefined): boolean {
+  if (!guard) return false;
+  return Object.values(guard).some(Boolean);
 }

@@ -175,7 +175,9 @@ export type RejectionReason =
   | 'PUBLIC_FALLBACK_DISABLED'
   | 'KILL_SWITCH_ACTIVE'
   | 'C2_PARENT_NOT_CONFIRMED'
-  | 'NONCE_CONFLICT';
+  | 'NONCE_CONFLICT'
+  | 'C2_DYNAMIC_REUSE_DETECTED'
+  | 'C2_STATE_RELOAD_MISMATCH';
 
 export type PipelineStage =
   | 'DISCOVERY'
@@ -354,6 +356,8 @@ export interface OpportunityEvidenceChain {
     c1SimHash?: string;
     c1TxHash?: string;
     c1RealizedNetUsd?: string;
+    c1StateHash?: string;
+    c1StateCommitment?: C1StateCommitment;
   };
   c2?: {
     cycleId: string;

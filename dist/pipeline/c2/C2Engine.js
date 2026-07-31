@@ -1,19 +1,19 @@
 "use strict";
 /**
- * C2Engine — hooks for the C2 (second-cycle) MIRROR / REVERSE / NOOP path.
+ * C2Engine — hooks for the C2 (second-cycle) MIRROR / REVERSE / NO_OP path.
  *
  * C2 INVARIANTS:
  *  1. C2 NEVER submits before the parent C1 receipt is confirmed.
  *  2. Post-C1 state is always reloaded before C2 sizing.
  *  3. C2 is only valid in blocks N+1 to N+5 relative to C1 confirmation.
  *  4. C2 profit is written separately — never merged with C1.
- *  5. NOOP is a valid and explicitly logged outcome.
+ *  5. NO_OP is a valid and explicitly logged outcome.
  *
  * Flow:
  *   1. Assert parent C1 is CONFIRMED (receiptStatus === true)
  *   2. Reload post-C1 pool state
- *   3. Evaluate MIRROR / REVERSE / NOOP
- *   4. If NOOP → log and return
+ *   3. Evaluate MIRROR / REVERSE / NO_OP
+ *   4. If NO_OP → log and return
  *   5. Request fresh nonce
  *   6. sign() → submit() via TxSubmitter
  *   7. wait() for NormalizedReceipt
@@ -37,17 +37,38 @@ class C2Engine {
         const chain = new EvidenceChain_js_1.EvidenceChain(req.opportunityId, req.config.configVersion, req.config.configHash);
         chain.setConfig(req.config);
         chain.setState(req.postC1State);
-        chain.setRoute(req.c2Route);
         const postC1StateHash = req.postC1State.stateHash;
         const c2RouteHash = (0, ethers_1.keccak256)((0, ethers_1.toUtf8Bytes)(JSON.stringify(req.c2Route)));
         chain.setC2({
             cycleId: req.cycleId,
             parentC1TxHash: req.parentC1TxHash,
             postC1StateHash,
-            c2Decision: req.c2Decision,
+            c2Decision: decision,
+            c2MirrorNetProfitUsd: req.mirrorCandidate?.netProfitUsd,
+            c2ReverseNetProfitUsd: req.reverseCandidate?.netProfitUsd,
+            c2MirrorGatesPassed: req.mirrorCandidate?.allGatesPassed ?? false,
+            c2ReverseGatesPassed: req.reverseCandidate?.allGatesPassed ?? false,
             c2RouteHash,
             c2SimHash: req.simulationHash,
         });
+        if (req.c1StateHash !== req.reloadedFromC1StateHash) {
+            this.logger.logRejection({
+                opportunityId: req.opportunityId,
+                stage: 'SUBMISSION',
+                status: 'REJECTED',
+                reason: 'C2_STATE_RELOAD_MISMATCH',
+                configVersion: req.config.configVersion,
+                stateHash: postC1StateHash,
+                detail: `Expected reload marker ${req.c1StateHash}, got ${req.reloadedFromC1StateHash}`,
+                timestamp: Date.now(),
+            });
+            return {
+                cycleId: req.cycleId,
+                decision,
+                skipped: true,
+                evidenceChain: chain,
+            };
+        }
         // ── Invariant 1: Parent C1 must be confirmed ───────────────────────────────
         if (!req.parentC1ReceiptStatus) {
             this.logger.logRejection({
@@ -57,13 +78,13 @@ class C2Engine {
                 reason: 'C2_PARENT_NOT_CONFIRMED',
                 configVersion: req.config.configVersion,
                 stateHash: postC1StateHash,
-                routeHash: c2RouteHash,
+                routeHash: c2RouteHash ?? '0x0',
                 detail: `Parent C1 tx ${req.parentC1TxHash} did not confirm`,
                 timestamp: Date.now(),
             });
             return {
                 cycleId: req.cycleId,
-                decision: req.c2Decision,
+                decision,
                 skipped: true,
                 evidenceChain: chain,
             };
@@ -85,13 +106,33 @@ class C2Engine {
             });
             return {
                 cycleId: req.cycleId,
-                decision: req.c2Decision,
+                decision,
                 skipped: true,
                 evidenceChain: chain,
             };
         }
-        // ── Invariant 3: NOOP is valid — log and return ────────────────────────────
-        if (req.c2Decision === 'NOOP') {
+        if (hasDynamicReuse(req.mirrorCandidate?.reuseGuard) ||
+            hasDynamicReuse(req.reverseCandidate?.reuseGuard)) {
+            this.logger.logRejection({
+                opportunityId: req.opportunityId,
+                stage: 'SUBMISSION',
+                status: 'REJECTED',
+                reason: 'C2_DYNAMIC_REUSE_DETECTED',
+                configVersion: req.config.configVersion,
+                stateHash: postC1StateHash,
+                routeHash: c2RouteHash ?? '0x0',
+                detail: 'Rejected due to C1 dynamic artifact reuse attempt',
+                timestamp: Date.now(),
+            });
+            return {
+                cycleId: req.cycleId,
+                decision,
+                skipped: true,
+                evidenceChain: chain,
+            };
+        }
+        // ── Invariant 3: NO_OP is valid — log and return ───────────────────────────
+        if (decision === 'NO_OP' || !selectedCandidate) {
             this.logger.logRejection({
                 opportunityId: req.opportunityId,
                 stage: 'PROFIT_GATE',
@@ -99,13 +140,31 @@ class C2Engine {
                 reason: 'NET_PROFIT_BELOW_MINIMUM',
                 configVersion: req.config.configVersion,
                 stateHash: postC1StateHash,
-                routeHash: c2RouteHash,
-                detail: 'C2 decision: NOOP — no profitable continuation found',
+                routeHash: c2RouteHash ?? '0x0',
+                detail: 'C2 decision: NO_OP — no profitable continuation found',
                 timestamp: Date.now(),
             });
             return {
                 cycleId: req.cycleId,
-                decision: 'NOOP',
+                decision: 'NO_OP',
+                skipped: true,
+                evidenceChain: chain,
+            };
+        }
+        if (!c2RouteHash) {
+            this.logger.logRejection({
+                opportunityId: req.opportunityId,
+                stage: 'SUBMISSION',
+                status: 'REJECTED',
+                reason: 'PAYLOAD_ABI_MISMATCH',
+                configVersion: req.config.configVersion,
+                stateHash: postC1StateHash,
+                detail: 'Selected candidate missing route hash',
+                timestamp: Date.now(),
+            });
+            return {
+                cycleId: req.cycleId,
+                decision,
                 skipped: true,
                 evidenceChain: chain,
             };
@@ -122,7 +181,7 @@ class C2Engine {
             maxFeePerGas: req.maxFeePerGas,
             maxPriorityFeePerGas: req.maxPriorityFeePerGas,
             to: req.executor,
-            data: req.encodedRoutePayload,
+            data: selectedCandidate.encodedRoutePayload,
             opportunityHash: req.opportunityHash,
             payloadHash: req.payloadHash,
             routeHash: c2RouteHash,
@@ -162,14 +221,18 @@ class C2Engine {
             cycleId: req.cycleId,
             parentC1TxHash: req.parentC1TxHash,
             postC1StateHash,
-            c2Decision: req.c2Decision,
+            c2Decision: decision,
+            c2MirrorNetProfitUsd: req.mirrorCandidate?.netProfitUsd,
+            c2ReverseNetProfitUsd: req.reverseCandidate?.netProfitUsd,
+            c2MirrorGatesPassed: req.mirrorCandidate?.allGatesPassed ?? false,
+            c2ReverseGatesPassed: req.reverseCandidate?.allGatesPassed ?? false,
             c2RouteHash,
             c2SimHash: req.simulationHash,
             c2TxHash: submission.txHash,
         });
         return {
             cycleId: req.cycleId,
-            decision: req.c2Decision,
+            decision,
             skipped: false,
             submission,
             receipt,

@@ -84,6 +84,7 @@ class C1Engine {
         // 5. Wait for receipt
         const receipt = await this.submitter.wait(submission.txHash);
         this.logger.logReceipt(req.opportunityId, receipt);
+        const c1StateCommitment = buildC1StateCommitment(req, receipt, submission.txHash);
         // 6. Build ledger record
         const ledgerRecord = {
             opportunityId: req.opportunityId,
@@ -109,8 +110,18 @@ class C1Engine {
             c1RouteHash: routeHash,
             c1SimHash: req.simulationHash,
             c1TxHash: submission.txHash,
+            c1RealizedNetUsd: req.postC1ObservedState.realizedProfitUsd,
+            c1StateHash: c1StateCommitment.c1StateHash,
+            c1StateCommitment,
         });
-        return { cycleId: req.cycleId, submission, receipt, ledgerRecord, evidenceChain: chain };
+        return {
+            cycleId: req.cycleId,
+            submission,
+            receipt,
+            ledgerRecord,
+            c1StateCommitment,
+            evidenceChain: chain,
+        };
     }
 }
 exports.C1Engine = C1Engine;
@@ -123,5 +134,29 @@ function assertC1Function(name) {
     if (!fragment) {
         throw new Error(`C1Engine: missing ABI fragment for ${name}`);
     }
+}
+function buildC1StateCommitment(req, receipt, txHash) {
+    const routeId = req.postC1ObservedState.routeId ?? req.route.routeHash;
+    const encoded = ethers_1.AbiCoder.defaultAbiCoder().encode(['uint256', 'uint256', 'bytes32', 'string[]', 'bytes32[]', 'string', 'address', 'string'], [
+        req.state.chainId,
+        receipt.confirmedBlock,
+        txHash,
+        req.postC1ObservedState.affectedPoolIds,
+        req.postC1ObservedState.postTradeStateHashes,
+        req.postC1ObservedState.realizedProfitUsd,
+        req.executor,
+        routeId,
+    ]);
+    return {
+        chainId: req.state.chainId,
+        blockNumber: receipt.confirmedBlock,
+        transactionHash: txHash,
+        affectedPoolIds: req.postC1ObservedState.affectedPoolIds,
+        postTradeStateHashes: req.postC1ObservedState.postTradeStateHashes,
+        realizedProfitUsd: req.postC1ObservedState.realizedProfitUsd,
+        executor: req.executor,
+        routeId,
+        c1StateHash: (0, ethers_1.keccak256)(encoded),
+    };
 }
 //# sourceMappingURL=C1Engine.js.map

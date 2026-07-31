@@ -83,7 +83,10 @@ function ethPriceUsd(snapshot: PairQuotes[]): number {
   for (const pair of snapshot) {
     if (
       pair.tokenIn === "WETH" &&
-      (pair.tokenOut === "USDC" || pair.tokenOut === "USDT" || pair.tokenOut === "DAI")
+      (pair.tokenOut === "USDC" ||
+        pair.tokenOut === "USDC.e" ||
+        pair.tokenOut === "USDT" ||
+        pair.tokenOut === "DAI")
     ) {
       for (const q of pair.quotes) {
         sum += q.price;
@@ -107,11 +110,24 @@ function ethPriceUsd(snapshot: PairQuotes[]): number {
  */
 function buildTokenPricesUsd(snapshot: PairQuotes[], ethUsd: number): Map<string, number> {
   const prices = new Map<string, number>([
-    ["WETH", ethUsd],
-    ["ETH",  ethUsd],
-    ["USDC", 1.0],
-    ["USDT", 1.0],
-    ["DAI",  1.0],
+    ["WETH",   ethUsd],
+    ["ETH",    ethUsd],
+    // USD-pegged stablecoins seeded at $1.00
+    ["USDC",   1.0],
+    ["USDC.e", 1.0],
+    ["USDT",   1.0],
+    ["DAI",    1.0],
+    ["FRAX",   1.0],
+    ["MAI",    1.0],
+    ["TUSD",   1.0],
+    ["pUSD",   1.0],
+    // EUR-pegged stablecoins seeded at approximate EUR/USD rate.
+    // These will be overridden if on-chain quotes are available.
+    ["agEUR",  1.08],
+    ["jEUR",   1.08],
+    ["EURe",   1.08],
+    ["EURO3",  1.08],
+    ["EURS",   1.08],
   ]);
 
   for (const pair of snapshot) {
@@ -441,9 +457,9 @@ export class OpportunityRanker {
         if (grossProfitRaw <= 0n) continue;
 
         // Convert exact raw profit to USD using the per-token price oracle.
-        // This correctly handles WETH, stablecoins, WBTC, WMATIC and any other
-        // token present in the snapshot — previous code wrongly fell back to
-        // treating non-WETH token units as dollars.
+        // This correctly handles WETH, stablecoins, WBTC, WMATIC, WPOL and any
+        // other token present in the snapshot — an assumed price would corrupt
+        // the profit gate and Kelly score.
         const tokenInPriceUsd = tokenPrices.get(tokenIn);
         // Skip if we cannot price the input token — an assumed price would
         // corrupt the profit gate and Kelly score.
